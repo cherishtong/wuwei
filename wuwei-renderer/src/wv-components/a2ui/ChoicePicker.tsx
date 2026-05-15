@@ -1,27 +1,33 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { createComponentImplementation } from '@a2ui/react/v0_9';
 import { ChoicePickerApi } from '@a2ui/web_core/v0_9/basic_catalog';
 import { Badge } from '@/wv-components/ui/badge';
 import { Input } from '@/wv-components/ui/input';
-import { Checkbox } from '@/wv-components/ui/checkbox';
 import { cn } from '@/wv-components/ui/lib/utils';
 
 function ChoicePickerComponent({ props }: { props: Record<string, any>; buildChild: (id: string, basePath?: string) => React.ReactNode; context: unknown }) {
   const [filter, setFilter] = useState('');
-  const values = Array.isArray(props.value) ? props.value : [];
-  const isMutuallyExclusive = props.variant === 'mutuallyExclusive';
   const setValue = props.setValue as ((v: string[]) => void) | undefined;
+  const initValues = Array.isArray(props.value) ? props.value : [];
+  const [values, setValues] = useState<string[]>(initValues);
+  const isMutuallyExclusive = props.variant === 'mutuallyExclusive';
   const displayChips = props.displayStyle === 'chips';
+
+  useEffect(() => {
+    setValues(Array.isArray(props.value) ? props.value : []);
+  }, [props.value]);
 
   const options = ((Array.isArray(props.options) ? props.options : []) as Array<{ label: string; value: string }>)
     .filter((opt) => !props.filterable || filter === '' || String(opt.label).toLowerCase().includes(filter.toLowerCase()));
 
   const onToggle = (val: string) => {
     if (isMutuallyExclusive) {
+      setValues([val]);
       setValue?.([val]);
     } else {
       const newValues = values.includes(val) ? values.filter((v) => v !== val) : [...values, val];
-      setValue?.(newValues as string[]);
+      setValues(newValues);
+      setValue?.(newValues);
     }
   };
 

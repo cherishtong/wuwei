@@ -1,41 +1,55 @@
-import { createComponentImplementation } from '@a2ui/react/v0_9';
+import { createComponentImplementation, useMarkdownRenderer } from '@a2ui/react/v0_9';
 import { TextApi } from '@a2ui/web_core/v0_9/basic_catalog';
-import { useMarkdownRenderer } from '@a2ui/react/v0_9';
 import { useState, useEffect } from 'react';
 
-function TextComponent({ props }: { props: Record<string, unknown>; buildChild: (id: string, basePath?: string) => React.ReactNode; context: unknown }) {
+function TextComponent({ props, context }: { props: Record<string, unknown>; buildChild: (id: string, basePath?: string) => React.ReactNode; context: { componentModel: { properties: Record<string, unknown> } } }) {
   const renderer = useMarkdownRenderer();
   const [mdHtml, setMdHtml] = useState<string | null>(null);
 
   const rawText = typeof props.text === 'string' ? props.text : String(props.text ?? '');
-  const variant = props.variant as string | undefined;
+  const variant = (context.componentModel.properties.variant as string) || 'body';
 
-  let markdown = rawText;
-  switch (variant) {
-    case 'h1': markdown = `# ${rawText}`; break;
-    case 'h2': markdown = `## ${rawText}`; break;
-    case 'h3': markdown = `### ${rawText}`; break;
-    case 'h4': markdown = `#### ${rawText}`; break;
-    case 'h5': markdown = `##### ${rawText}`; break;
-    case 'caption': markdown = `*${rawText}*`; break;
+  // Headings: inline styles (avoids Tailwind preflight + MarkdownContext nesting issues)
+  if (variant === 'h1') {
+    return <div style={{ fontSize: '2.25rem', fontWeight: 700, lineHeight: '2.5rem', letterSpacing: '-0.025em' }}>{rawText}</div>;
+  }
+  if (variant === 'h2') {
+    return <div style={{ fontSize: '1.875rem', fontWeight: 600, lineHeight: '2.25rem', letterSpacing: '-0.025em' }}>{rawText}</div>;
+  }
+  if (variant === 'h3') {
+    return <div style={{ fontSize: '1.5rem', fontWeight: 600, lineHeight: '2rem', letterSpacing: '-0.025em' }}>{rawText}</div>;
+  }
+  if (variant === 'h4') {
+    return <div style={{ fontSize: '1.25rem', fontWeight: 600, lineHeight: '1.75rem', letterSpacing: '-0.025em' }}>{rawText}</div>;
+  }
+  if (variant === 'h5') {
+    return <div style={{ fontSize: '1.125rem', fontWeight: 500, lineHeight: '1.75rem' }}>{rawText}</div>;
   }
 
+  // Body / caption: use markdown renderer for rich text (bold, italic, code, tables, etc.)
   useEffect(() => {
     if (renderer) {
-      renderer(markdown, undefined).then(setMdHtml).catch(() => setMdHtml(null));
+      renderer(rawText, undefined).then(setMdHtml).catch(() => setMdHtml(null));
     }
-  }, [markdown, renderer]);
+  }, [rawText, renderer]);
 
-  const style: React.CSSProperties = {
-    boxSizing: 'border-box',
-    color: variant === 'caption' ? 'var(--a2ui-text-caption-color, #8b949e)' : undefined,
-    fontSize: variant === 'caption' ? 'var(--a2ui-font-size-xs, 11px)' : undefined,
-  };
+  const isCaption = variant === 'caption';
+  const twClass = isCaption ? 'text-xs text-muted-foreground' : 'text-base';
 
-  if (variant === 'caption') {
-    return <span style={style} dangerouslySetInnerHTML={mdHtml ? { __html: mdHtml } : undefined}>{!mdHtml ? markdown : undefined}</span>;
+  if (isCaption) {
+    return (
+      <span className={twClass}
+        dangerouslySetInnerHTML={mdHtml ? { __html: mdHtml } : undefined}>
+        {!mdHtml ? rawText : undefined}
+      </span>
+    );
   }
-  return <div style={style} dangerouslySetInnerHTML={mdHtml ? { __html: mdHtml } : undefined}>{!mdHtml ? markdown : undefined}</div>;
+  return (
+    <div className={twClass}
+      dangerouslySetInnerHTML={mdHtml ? { __html: mdHtml } : undefined}>
+      {!mdHtml ? rawText : undefined}
+    </div>
+  );
 }
 
 export const WvA2uiText = createComponentImplementation(TextApi as never, TextComponent as never);

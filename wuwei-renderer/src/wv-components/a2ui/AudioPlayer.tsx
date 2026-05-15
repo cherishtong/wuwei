@@ -3,19 +3,11 @@ import { AudioPlayerApi } from '@a2ui/web_core/v0_9/basic_catalog';
 
 function AudioPlayerComponent({ props }: { props: Record<string, any>; buildChild: (id: string, basePath?: string) => React.ReactNode; context: unknown }) {
   return (
-    <div style={{
-      display: 'flex', flexDirection: 'column',
-      gap: 'var(--a2ui-spacing-xs, 0.25rem)',
-      background: 'var(--a2ui-audioplayer-background, transparent)',
-      borderRadius: 'var(--a2ui-audioplayer-border-radius, 0)',
-      padding: 'var(--a2ui-audioplayer-padding, 0)',
-    }}>
+    <div className="flex flex-col gap-1 bg-transparent rounded-none p-0">
       {props.description && (
-        <span style={{ fontSize: 'var(--a2ui-font-size-xs, 0.75rem)', color: 'var(--a2ui-text-caption-color, #8b949e)' }}>
-          {props.description as string}
-        </span>
+        <span className="text-xs text-muted-foreground">{props.description as string}</span>
       )}
-      <audio src={props.url as string} controls style={{ width: '100%' }} />
+      <audio src={props.url as string} controls className="w-full" />
     </div>
   );
 }

@@ -8,12 +8,7 @@ function ColumnComponent({ props, buildChild }: { props: Record<string, unknown>
   const align = mapAlign(props.align as string);
 
   return (
-    <div style={{
-      display: 'flex', flexDirection: 'column',
-      justifyContent: justify, alignItems: align,
-      gap: 'var(--a2ui-column-gap, var(--a2ui-spacing-m))',
-      boxSizing: 'border-box',
-    }}>
+    <div className="flex flex-col box-border gap-4" style={{ justifyContent: justify, alignItems: align }}>
       {children.map((child: string | { id: string; basePath?: string }, i: number) => {
         if (typeof child === 'string') return <Fragment key={`${child}-${i}`}>{buildChild(child)}</Fragment>;
         if (child && typeof child === 'object' && 'id' in child) return <Fragment key={`${child.id}-${i}`}>{buildChild(child.id, child.basePath)}</Fragment>;

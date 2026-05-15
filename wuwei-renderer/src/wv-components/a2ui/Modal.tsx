@@ -8,7 +8,7 @@ function ModalComponent({ props, buildChild }: { props: Record<string, any>; bui
 
   return (
     <>
-      <div onClick={() => setOpen(true)} style={{ display: 'inline-block', cursor: 'pointer' }}>
+      <div onClick={() => setOpen(true)} className="inline-block cursor-pointer">
         {props.trigger ? buildChild(props.trigger as string) : null}
       </div>
       <Dialog open={open} onOpenChange={setOpen}>

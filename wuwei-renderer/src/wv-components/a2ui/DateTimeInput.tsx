@@ -1,4 +1,4 @@
-import { useId } from 'react';
+import { useId, useState, useEffect } from 'react';
 import { createComponentImplementation } from '@a2ui/react/v0_9';
 import { DateTimeInputApi } from '@a2ui/web_core/v0_9/basic_catalog';
 
@@ -8,6 +8,11 @@ function DateTimeInputComponent({ props }: { props: Record<string, any>; buildCh
   if (props.enableDate && !props.enableTime) type = 'date';
   if (!props.enableDate && props.enableTime) type = 'time';
   const setValue = props.setValue as ((v: string) => void) | undefined;
+  const [val, setVal] = useState((props.value as string) || '');
+
+  useEffect(() => {
+    setVal((props.value as string) || '');
+  }, [props.value]);
 
   return (
     <div className="flex flex-col gap-1">
@@ -17,8 +22,8 @@ function DateTimeInputComponent({ props }: { props: Record<string, any>; buildCh
       <input
         id={id}
         type={type}
-        value={(props.value as string) || ''}
-        onChange={(e) => setValue?.(e.target.value)}
+        value={val}
+        onChange={(e) => { setVal(e.target.value); setValue?.(e.target.value); }}
         min={typeof props.min === 'string' ? props.min : undefined}
         max={typeof props.max === 'string' ? props.max : undefined}
         className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"

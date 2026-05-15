@@ -157,27 +157,36 @@ public class MessageRouter {
         String home = System.getProperty("user.home");
         Path destDir = Paths.get(home, ".wuwei", "skills", skillId);
         try {
-            if (Files.exists(destDir)) {
-                // Remove old version first
-                try (Stream<Path> files = Files.walk(destDir)) {
-                    files.sorted(Comparator.reverseOrder()).forEach(p -> {
-                        try { Files.delete(p); } catch (Exception ignored) {}
+            // Normalize both paths to detect when src == dest (re-install of same path).
+            // Without this check, the delete+copy below would wipe the source directory.
+            Path srcAbs = srcDir.toRealPath();
+            boolean sameDir = Files.exists(destDir) && srcAbs.equals(destDir.toRealPath());
+
+            if (!sameDir) {
+                if (Files.exists(destDir)) {
+                    // Remove old version first
+                    try (Stream<Path> files = Files.walk(destDir)) {
+                        files.sorted(Comparator.reverseOrder()).forEach(p -> {
+                            try { Files.delete(p); } catch (Exception ignored) {}
+                        });
+                    }
+                }
+                Files.createDirectories(destDir);
+                try (Stream<Path> files = Files.walk(srcDir)) {
+                    files.forEach(src -> {
+                        try {
+                            Path rel = srcDir.relativize(src);
+                            Path dest = destDir.resolve(rel);
+                            if (Files.isDirectory(src)) {
+                                Files.createDirectories(dest);
+                            } else {
+                                Files.copy(src, dest, StandardCopyOption.REPLACE_EXISTING);
+                            }
+                        } catch (Exception ignored) {}
                     });
                 }
-            }
-            Files.createDirectories(destDir);
-            try (Stream<Path> files = Files.walk(srcDir)) {
-                files.forEach(src -> {
-                    try {
-                        Path rel = srcDir.relativize(src);
-                        Path dest = destDir.resolve(rel);
-                        if (Files.isDirectory(src)) {
-                            Files.createDirectories(dest);
-                        } else {
-                            Files.copy(src, dest, StandardCopyOption.REPLACE_EXISTING);
-                        }
-                    } catch (Exception ignored) {}
-                });
+            } else {
+                log.info("Install source equals dest ({}), skipping copy", sourcePath);
             }
 
             log.info("Installing skill {} from {}", skillId, sourcePath);

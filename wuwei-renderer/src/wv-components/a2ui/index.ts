@@ -18,6 +18,35 @@ import { WvA2uiDateTimeInput } from './DateTimeInput';
 import { WvA2uiChoicePicker } from './ChoicePicker';
 import { WvA2uiTabs } from './Tabs';
 import { WvA2uiModal } from './Modal';
+import { WvA2uiTable } from './Table';
+import { WvA2uiBadge } from './Badge';
+import { WvA2uiProgress } from './Progress';
+import { WvA2uiAvatar } from './Avatar';
+import { WvA2uiAlert } from './Alert';
+import { WvA2uiSwitch } from './Switch';
+import { WvA2uiAspectRatio } from './AspectRatio';
+import { WvA2uiSkeleton } from './Skeleton';
+import { WvA2uiCollapsible } from './Collapsible';
+import { WvA2uiTooltip } from './Tooltip';
+import { WvA2uiHoverCard } from './HoverCard';
+import { WvA2uiPopover } from './Popover';
+import { WvA2uiSheet } from './Sheet';
+import { WvA2uiDrawer } from './Drawer';
+import { WvA2uiAlertDialog } from './AlertDialog';
+import { WvA2uiToggle } from './Toggle';
+import { WvA2uiToggleGroup } from './ToggleGroup';
+import { WvA2uiAccordion } from './Accordion';
+import { WvA2uiRadioGroup } from './RadioGroup';
+import { WvA2uiSelect } from './Select';
+import { WvA2uiPagination } from './Pagination';
+import { WvA2uiInputOTP } from './InputOTP';
+import { WvA2uiBreadcrumb } from './Breadcrumb';
+import { WvA2uiDropdownMenu } from './DropdownMenu';
+import { WvA2uiContextMenu } from './ContextMenu';
+import { WvA2uiCarousel } from './Carousel';
+import { WvA2uiCommand } from './Command';
+import { WvA2uiSonner } from './Sonner';
+import { WvA2uiScrollArea } from './ScrollArea';
 
 export const wvCatalog = new Catalog(
   'https://a2ui.org/specification/v0_9/basic_catalog.json',
@@ -40,6 +69,35 @@ export const wvCatalog = new Catalog(
     WvA2uiChoicePicker,
     WvA2uiTabs,
     WvA2uiModal,
+    WvA2uiTable,
+    WvA2uiBadge,
+    WvA2uiProgress,
+    WvA2uiAvatar,
+    WvA2uiAlert,
+    WvA2uiSwitch,
+    WvA2uiAspectRatio,
+    WvA2uiSkeleton,
+    WvA2uiCollapsible,
+    WvA2uiTooltip,
+    WvA2uiHoverCard,
+    WvA2uiPopover,
+    WvA2uiSheet,
+    WvA2uiDrawer,
+    WvA2uiAlertDialog,
+    WvA2uiToggle,
+    WvA2uiToggleGroup,
+    WvA2uiAccordion,
+    WvA2uiRadioGroup,
+    WvA2uiSelect,
+    WvA2uiPagination,
+    WvA2uiInputOTP,
+    WvA2uiBreadcrumb,
+    WvA2uiDropdownMenu,
+    WvA2uiContextMenu,
+    WvA2uiCarousel,
+    WvA2uiCommand,
+    WvA2uiSonner,
+    WvA2uiScrollArea,
   ] as never,
   BASIC_FUNCTIONS
 );

@@ -1,4 +1,4 @@
-import { useId } from 'react';
+import { useId, useState, useEffect } from 'react';
 import { createComponentImplementation } from '@a2ui/react/v0_9';
 import { TextFieldApi } from '@a2ui/web_core/v0_9/basic_catalog';
 import { Input } from '@/wv-components/ui/input';
@@ -10,6 +10,11 @@ function TextFieldComponent({ props }: { props: Record<string, any>; buildChild:
   const type = props.variant === 'number' ? 'number' : props.variant === 'obscured' ? 'password' : 'text';
   const hasError = Array.isArray(props.validationErrors) && props.validationErrors.length > 0;
   const setValue = props.setValue as ((v: string) => void) | undefined;
+  const [val, setVal] = useState((props.value as string) || '');
+
+  useEffect(() => {
+    setVal((props.value as string) || '');
+  }, [props.value]);
 
   return (
     <div className="flex flex-col gap-1">
@@ -18,15 +23,15 @@ function TextFieldComponent({ props }: { props: Record<string, any>; buildChild:
         <textarea
           id={id}
           className="flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-          value={(props.value as string) || ''}
-          onChange={(e) => setValue?.(e.target.value)}
+          value={val}
+          onChange={(e) => { setVal(e.target.value); setValue?.(e.target.value); }}
         />
       ) : (
         <Input
           id={id}
           type={type}
-          value={(props.value as string) || ''}
-          onChange={(e) => setValue?.(e.target.value)}
+          value={val}
+          onChange={(e) => { setVal(e.target.value); setValue?.(e.target.value); }}
           className={hasError ? 'border-destructive' : ''}
         />
       )}

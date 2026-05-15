@@ -8,15 +8,15 @@ function ListComponent({ props, buildChild }: { props: Record<string, unknown>; 
   const align = mapAlign(props.align as string);
 
   return (
-    <div style={{
-      display: 'flex',
-      flexDirection: isHorizontal ? 'row' : 'column',
-      alignItems: align,
-      overflowX: isHorizontal ? 'auto' : 'hidden',
-      overflowY: isHorizontal ? 'hidden' : 'auto',
-      gap: 'var(--a2ui-list-gap, var(--a2ui-spacing-s))',
-      padding: 'var(--a2ui-list-padding, 0)',
-    }}>
+    <div
+      className="flex gap-2 p-0 box-border"
+      style={{
+        flexDirection: isHorizontal ? 'row' : 'column',
+        alignItems: align,
+        overflowX: isHorizontal ? 'auto' : 'hidden',
+        overflowY: isHorizontal ? 'hidden' : 'auto',
+      }}
+    >
       {children.map((child: string | { id: string; basePath?: string }, i: number) => {
         if (typeof child === 'string') return <Fragment key={`${child}-${i}`}>{buildChild(child)}</Fragment>;
         if (child && typeof child === 'object' && 'id' in child) return <Fragment key={`${child.id}-${i}`}>{buildChild(child.id, child.basePath)}</Fragment>;
