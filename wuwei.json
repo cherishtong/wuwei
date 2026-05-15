@@ -1,0 +1,44 @@
+{
+  "version": "6.4.0",
+  "llm": {
+    "provider": "deepseek",
+    "model": "deepseek-v4-pro",
+    "apiKeyEnv": "OPENAI_API_KEY",
+    "apiKey": "sk-1a94da348bdb411cad94fa300890359f",
+    "baseUrl": null,
+    "timeoutSeconds": 60,
+    "maxRetries": 3
+  },
+  "sandbox": {
+    "statementLimit": 10000000,
+    "timeoutSeconds": 5,
+    "memoryLimitMb": 128,
+    "maxActiveConcurrent": 30
+  },
+  "gate": {
+    "networkDefaultQuota": "100/min",
+    "eventEmitRateLimit": "10/sec",
+    "maxQueueDepth": 1000,
+    "autoApproveOrigins": ["local"],
+    "requireConfirmOrigins": ["community", "network"]
+  },
+  "store": {
+    "registryDb": "~/.wuwei/data/registry.db",
+    "snapshotDb": "~/.wuwei/data/snapshot.db",
+    "skillStateDir": "~/.wuwei/skills"
+  },
+  "skills": {
+    "dir": "~/.wuwei/skills",
+    "maxLineageVersions": 10,
+    "traceLogMaxPerSkill": 200,
+    "traceLogRetentionDays": 30,
+    "registryUrls": []
+  },
+  "normalizer": {
+    "enabled": true,
+    "sortJsonKeys": true,
+    "removeNumericSuffixes": true
+  },
+  "maxRepairAttempts": 10,
+  "logLevel": "info"
+}

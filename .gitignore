@@ -1,0 +1,58 @@
+# Logs
+*.log
+
+# Runtime artifacts
+current_kernel_port.txt
+*stdout*.txt
+*stderr*.txt
+stdout.txt
+stderr.txt
+test_stdout.txt
+test_stderr.txt
+kernel-stderr.txt
+kernel-stdout.txt
+
+# IDE compile output
+bin/
+
+# Gradle (wuwei-core)
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+*.class
+*.jar
+*.war
+
+# GraalVM native-image
+*.o
+*.obj
+*.h
+*.bc
+*.ll
+*.build_artifacts.txt
+
+# Node (wuwei-renderer)
+node_modules/
+dist/
+
+# Rust / Cargo build output
+wuwei-renderer/src-tauri/target
+
+# OS
+Thumbs.db
+.DS_Store
+Desktop.ini
+
+# Environment
+.env
+.env.local
+
+# Claude Code (local)
+.claude/settings.local.json
+
+# IDE
+.idea/
+*.iml
+*.swp
+*.swo
+*~
