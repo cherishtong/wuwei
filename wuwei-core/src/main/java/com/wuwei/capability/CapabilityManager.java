@@ -7,6 +7,8 @@ import com.wuwei.store.SkillStateStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -145,5 +147,139 @@ public class CapabilityManager {
             return false;
         });
         activeCapSets.remove(skillId);
+    }
+
+    // ── Proxy execution (browser-js capability proxy) ─────────────
+
+    /**
+     * Execute a capability call directly for browser-js skills.
+     * Bypasses GraalJS ProxyObjects — returns plain Java objects for JSON serialization.
+     */
+    @SuppressWarnings("unchecked")
+    public Object executeProxy(String skillId, String capName, String method, List<Object> args) {
+        CapabilitySet capSet = activeCapSets.get(skillId);
+        if (capSet == null) {
+            return Map.of("error", "No capability set for " + skillId);
+        }
+        try {
+            return switch (capName) {
+                case "storage" -> executeStorageProxy(skillId, method, args);
+                case "network" -> executeNetworkProxy(skillId, method, args);
+                case "ai" -> executeAiProxy(method, args);
+                case "file" -> executeFileProxy(skillId, method, args);
+                case "os" -> executeOsProxy(method, args);
+                default -> Map.of("error", "Unknown capability: " + capName);
+            };
+        } catch (Exception e) {
+            log.error("Proxy execution failed: {}.{}({})", capName, method, args, e);
+            return Map.of("error", e.getMessage());
+        }
+    }
+
+    private Object executeStorageProxy(String skillId, String method, List<Object> args) {
+        return switch (method) {
+            case "get" -> stateStore.get(skillId, (String) args.get(0));
+            case "put" -> {
+                stateStore.put(skillId, (String) args.get(0), (String) args.get(1));
+                yield null;
+            }
+            case "delete" -> {
+                stateStore.delete(skillId, (String) args.get(0));
+                yield null;
+            }
+            default -> Map.of("error", "Unknown storage method: " + method);
+        };
+    }
+
+    private Object executeNetworkProxy(String skillId, String method, List<Object> args) {
+        if ("fetch".equals(method)) {
+            Map<String, Object> opts = (Map<String, Object>) args.get(0);
+            String url = (String) opts.get("url");
+            // Build a skill manifest-like allowlist lookup for the actual call
+            CapabilitySet capSet = activeCapSets.get(skillId);
+            List<String> allowlist = capSet != null ? capSet.getNetworkAllowlist() : List.of();
+            var result = networkCap.executeRequest(
+                skillId, url,
+                opts.getOrDefault("method", "GET").toString().toUpperCase(),
+                opts.get("body") != null ? opts.get("body").toString() : null,
+                allowlist
+            );
+            // result is a ProxyObject with status/body — unwrap it
+            if (result instanceof org.graalvm.polyglot.proxy.ProxyObject po) {
+                Object status = po.getMember("status");
+                Object body = po.getMember("body");
+                Map<String, Object> plain = new LinkedHashMap<>();
+                plain.put("status", status);
+                plain.put("body", body);
+                return plain;
+            }
+            return result;
+        }
+        return Map.of("error", "Unknown network method: " + method);
+    }
+
+    private Object executeAiProxy(String method, List<Object> args) {
+        if ("ask".equals(method)) {
+            String prompt = (String) args.get(0);
+            var result = aiCap.executeAsk(prompt);
+            if (result instanceof org.graalvm.polyglot.proxy.ProxyObject po) {
+                Map<String, Object> plain = new LinkedHashMap<>();
+                plain.put("status", po.getMember("status"));
+                plain.put("body", po.getMember("body"));
+                return plain;
+            }
+            return result;
+        }
+        return Map.of("error", "Unknown ai method: " + method);
+    }
+
+    private Object executeFileProxy(String skillId, String method, List<Object> args) {
+        // Use FileCapability via a direct helper — it creates sandbox-rooted paths
+        String home = System.getProperty("user.home");
+        java.nio.file.Path sandboxRoot = java.nio.file.Paths.get(
+            home, ".wuwei", "skills", skillId, "phenotype", "sandbox");
+        try {
+            java.nio.file.Files.createDirectories(sandboxRoot);
+        } catch (java.io.IOException ignored) {}
+
+        return switch (method) {
+            case "read" -> {
+                java.nio.file.Path p = FileCapability.resolveSandboxed(skillId, sandboxRoot, (String) args.get(0));
+                try { yield java.nio.file.Files.readString(p); }
+                catch (java.io.IOException e) { yield Map.of("error", e.getMessage()); }
+            }
+            case "write" -> {
+                java.nio.file.Path p = FileCapability.resolveSandboxed(skillId, sandboxRoot, (String) args.get(0));
+                try {
+                    java.nio.file.Files.createDirectories(p.getParent());
+                    java.nio.file.Files.writeString(p, (String) args.get(1));
+                    yield null;
+                } catch (java.io.IOException e) { yield Map.of("error", e.getMessage()); }
+            }
+            case "list" -> {
+                java.nio.file.Path dir = FileCapability.resolveSandboxed(skillId, sandboxRoot, (String) args.get(0));
+                try (var stream = java.nio.file.Files.list(dir)) {
+                    yield stream.map(java.nio.file.Path::getFileName)
+                        .map(java.nio.file.Path::toString)
+                        .toList();
+                } catch (java.io.IOException e) { yield List.of(); }
+            }
+            case "delete" -> {
+                java.nio.file.Path p = FileCapability.resolveSandboxed(skillId, sandboxRoot, (String) args.get(0));
+                try { java.nio.file.Files.delete(p); yield null; }
+                catch (java.io.IOException e) { yield Map.of("error", e.getMessage()); }
+            }
+            default -> Map.of("error", "Unknown file method: " + method);
+        };
+    }
+
+    private Object executeOsProxy(String method, List<Object> args) {
+        if ("notify".equals(method)) {
+            String title = (String) args.get(0);
+            String body = (String) args.get(1);
+            eventBus.publish(new KernelEvent.SystemNotify(title, body));
+            return null;
+        }
+        return Map.of("error", "Unknown os method: " + method);
     }
 }

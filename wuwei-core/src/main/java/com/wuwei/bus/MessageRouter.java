@@ -68,7 +68,8 @@ public class MessageRouter {
                 case "get-rate-limit"   -> handleGetRateLimit(session);
                 case "refine-skill"     -> handleRefineSkill(session, msg);
                 case "get-skill-source" -> handleGetSkillSource(session, msg);
-                case "revoke-cap"       -> handleRevokeCap(session, msg);
+                case "revoke-cap"         -> handleRevokeCap(session, msg);
+                case "capability-proxy" -> handleCapabilityProxy(session, msg);
                 default -> sendError(session, "system", "UNKNOWN_TYPE", "Unknown message type: " + type);
             }
         } catch (Exception e) {
@@ -257,6 +258,21 @@ public class MessageRouter {
         capManager.revoke(skillId, capName);
     }
 
+    private void handleCapabilityProxy(WsSession session, JsonNode msg) {
+        String skillId = extractText(msg, "skillId");
+        String capName = extractText(msg, "capName");
+        String method = extractText(msg, "method");
+        String requestId = extractText(msg, "requestId");
+        List<Object> args = extractList(msg, "args");
+
+        log.debug("capability-proxy: skill={} cap={}.{}({})", skillId, capName, method, args);
+
+        Object result = capManager.executeProxy(skillId, capName, method, args);
+
+        eventBus.publishTo(session, new KernelEvent.CapabilityProxyResult(
+            skillId, requestId, result, null));
+    }
+
     // ── Workbench: view skill source ────────────────────────────
 
     private void handleGetSkillSource(WsSession session, JsonNode msg) {
@@ -320,6 +336,17 @@ public class MessageRouter {
         } catch (Exception e) {
             log.warn("Failed to extract map field {}: {}", field, e.getMessage());
             return Map.of();
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Object> extractList(JsonNode node, String field) {
+        if (!node.has(field) || node.get(field).isNull()) return List.of();
+        try {
+            return mapper.convertValue(node.get(field), List.class);
+        } catch (Exception e) {
+            log.warn("Failed to extract list field {}: {}", field, e.getMessage());
+            return List.of();
         }
     }
 

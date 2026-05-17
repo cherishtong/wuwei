@@ -122,7 +122,7 @@ public class FileCapability {
      * Resolve a virtual path against the sandbox root, preventing path traversal.
      * All virtual paths are treated as relative and resolved within the sandbox.
      */
-    static Path resolveSandboxed(String skillId, Path sandboxRoot, String virtualPath) {
+    public static Path resolveSandboxed(String skillId, Path sandboxRoot, String virtualPath) {
         // Strip leading slash to make it relative
         String relative = virtualPath.startsWith("/") ? virtualPath.substring(1) : virtualPath;
 

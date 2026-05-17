@@ -28,7 +28,8 @@ class EventBusTest {
     void skillActivated_shouldContainUiAndPatches() throws Exception {
         var patches = List.of();
         var ui = mapper.createObjectNode().put("version", "a2ui/1.0");
-        var event = new KernelEvent.SkillActivated("test-skill", ui, patches);
+        var event = new KernelEvent.SkillActivated("test-skill", ui, patches,
+            "js", null, java.util.Map.of());
         String json = serialize(event);
         JsonNode node = mapper.readTree(json);
 

@@ -6,6 +6,7 @@ import { renderMarkdown } from '@a2ui/markdown-it';
 import { wvCatalog } from '@/wv-components/a2ui';
 import { Badge } from '@/wv-components/ui/badge';
 import { kernel } from '../kernel';
+import { BrowserRuntime } from '../runtime/BrowserRuntime';
 
 const CATALOG_ID = 'https://a2ui.org/specification/v0_9/basic_catalog.json';
 
@@ -17,6 +18,9 @@ export function WwWorkspace() {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const processorRef = useRef<MessageProcessor<any> | null>(null);
   const dedupRef = useRef({ key: '', time: 0 });
+  const componentTypeMapRef = useRef(new Map<string, string>());
+  const browserRuntimeRef = useRef(new BrowserRuntime());
+  const isBrowserJsRef = useRef(false);
 
   function loadSkill(skillId: string, skillDisplayName: string, ui: Record<string, unknown>) {
     currentSkillIdRef.current = skillId;
@@ -29,6 +33,14 @@ export function WwWorkspace() {
       const root = components.splice(rootIdx, 1)[0];
       components = [root, ...components];
     }
+
+    // Build component type lookup for browser-js patch enrichment
+    const typeMap = new Map<string, string>();
+    for (const comp of components) {
+      const cid = comp['id'] as string | undefined;
+      if (cid) typeMap.set(cid, (comp['component'] as string) || '');
+    }
+    componentTypeMapRef.current = typeMap;
 
     const dmInit: Record<string, unknown> = {};
     for (const comp of components) {
@@ -80,11 +92,28 @@ export function WwWorkspace() {
     const dataPatches: { path: string; value: unknown }[] = [];
     const compPatches: Record<string, unknown>[] = [];
 
+    const surface = surfaceMapRef.current.get('main');
     for (const p of patches) {
       if (p['type'] === 'data') {
         dataPatches.push({ path: p['path'] as string, value: p['value'] });
       } else {
-        compPatches.push(p);
+        // Enrich with component type if missing and merge with existing properties.
+        // A2UI processUpdateComponentsMessage replaces properties entirely,
+        // so we must include all original props to avoid losing fields like variant.
+        const compId = p['id'] as string;
+        let compType = p['component'] as string | undefined;
+        if (!compType) {
+          compType = componentTypeMapRef.current.get(compId);
+        }
+        const existing = surface?.componentsModel.get(compId);
+        const base = existing?.properties ?? {};
+        const merged: Record<string, unknown> = { ...base };
+        for (const [k, v] of Object.entries(p)) {
+          if (k !== 'id' && k !== 'component') {
+            merged[k] = v;
+          }
+        }
+        compPatches.push({ id: compId, component: compType ?? existing?.type ?? 'unknown', ...merged });
       }
     }
 
@@ -131,7 +160,21 @@ export function WwWorkspace() {
         }
       }
 
-      kernel.handleEvent(currentSkillIdRef.current, action.name, { ...dmValues, ...resolved });
+      if (isBrowserJsRef.current) {
+        // Browser-js: execute handler locally — zero latency
+        browserRuntimeRef.current.handleEvent(
+          currentSkillIdRef.current,
+          action.name,
+          { ...dmValues, ...resolved }
+        );
+      } else {
+        // Standard kernel-js: WebSocket round-trip
+        kernel.handleEvent(
+          currentSkillIdRef.current,
+          action.name,
+          { ...dmValues, ...resolved }
+        );
+      }
     };
 
     const processor = new MessageProcessor([wvCatalog] as never, actionHandler);
@@ -146,8 +189,23 @@ export function WwWorkspace() {
     processorRef.current = processor;
 
     const onSkillActivated = (e: Event) => {
-      const { skillId, skillName: name, ui } = (e as CustomEvent).detail;
+      const { skillId, skillName: name, ui, runtime, handlersJs, capabilities } =
+        (e as CustomEvent).detail;
       loadSkill(skillId, name || skillId, ui);
+
+      if (runtime === 'browser-js' && handlersJs) {
+        isBrowserJsRef.current = true;
+        browserRuntimeRef.current.load(
+          skillId,
+          handlersJs,
+          capabilities || {},
+          applyPatches
+        );
+        // Fire __init__ locally
+        browserRuntimeRef.current.handleEvent(skillId, '__init__', {});
+      } else {
+        isBrowserJsRef.current = false;
+      }
     };
     const onA2uiPatch = (e: Event) => {
       const { skillId, patches } = (e as CustomEvent).detail;
@@ -156,6 +214,8 @@ export function WwWorkspace() {
     const onSkillDeactivated = (e: Event) => {
       const { skillId } = (e as CustomEvent).detail;
       if (skillId === currentSkillIdRef.current) {
+        isBrowserJsRef.current = false;
+        browserRuntimeRef.current.unload(skillId);
         currentSkillIdRef.current = null;
         setSkillName('');
         clearSurfaces();
@@ -198,7 +258,7 @@ export function WwWorkspace() {
       </div>
 
       {/* A2UI surface */}
-      <div className="flex-1 overflow-y-auto p-6">
+      <div className="flex-1 flex flex-col overflow-y-auto p-6">
         <MarkdownContext.Provider value={renderMarkdown}>
           {surfaceIds.map((id) => {
             const surface = surfaceMapRef.current.get(id);

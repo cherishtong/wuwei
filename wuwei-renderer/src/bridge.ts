@@ -66,6 +66,9 @@ export function initBridge() {
       case 'skill-source':
         dispatch('skill-source', msg);
         break;
+      case 'capability-proxy-result':
+        dispatch('capability-proxy-result', msg);
+        break;
       default:
         console.debug('[bridge] unhandled message type:', msg.type);
     }

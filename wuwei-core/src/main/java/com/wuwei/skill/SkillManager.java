@@ -85,8 +85,10 @@ public class SkillManager {
      */
     public void startupLoad() {
         Path dir = Path.of(skillsBaseDir);
+        System.out.println("[SkillManager] skillsBaseDir=" + skillsBaseDir + " exists=" + Files.isDirectory(dir));
         if (!Files.isDirectory(dir)) {
             log.info("Skills directory not found, creating: {}", skillsBaseDir);
+            System.out.println("[SkillManager] Skills directory not found, creating: " + skillsBaseDir);
             try {
                 Files.createDirectories(dir);
             } catch (Exception e) {
@@ -99,14 +101,18 @@ public class SkillManager {
                 String skillId = skillDir.getFileName().toString();
                 try {
                     loadFromDirectory(skillDir);
+                    System.out.println("[SkillManager] Startup-loaded: " + skillId);
                     log.info("Startup-loaded skill: {}", skillId);
                 } catch (Exception e) {
+                    System.out.println("[SkillManager] FAILED to load " + skillId + ": " + e.getMessage());
                     log.error("Failed to startup-load skill {}: {}", skillId, e.getMessage());
                 }
             });
         } catch (Exception e) {
+            System.out.println("[SkillManager] Scan error: " + e.getMessage());
             log.error("Failed to scan skills directory", e);
         }
+        System.out.println("[SkillManager] Skills loaded: " + skills.keySet());
         log.info("Skills loaded at startup: {}", skills.keySet());
 
         // Start file watcher for hot-reload
@@ -146,6 +152,14 @@ public class SkillManager {
     private void checkAndReload(Path skillDir) {
         String skillId = skillDir.getFileName().toString();
         try {
+            Path manifestPath = skillDir.resolve("skill.json");
+            if (!Files.exists(manifestPath)) {
+                // Directory without skill.json — skip (might be staging or stale)
+                if (skills.containsKey(skillId)) {
+                    uninstall(skillId);
+                }
+                return;
+            }
             long latestMod = getLatestModified(skillDir);
             Long prev = lastModified.put(skillId, latestMod);
             if (prev != null && prev.longValue() == latestMod) {
@@ -153,6 +167,10 @@ public class SkillManager {
             }
             if (prev != null) {
                 log.info("Hot-reload: {} changed (mod time {} -> {})", skillId, prev, latestMod);
+                reloadSkill(skillDir);
+            } else if (!skills.containsKey(skillId)) {
+                // New skill directory discovered after startup
+                log.info("Hot-reload: new skill discovered {}", skillId);
                 reloadSkill(skillDir);
             }
         } catch (Exception e) {
@@ -201,8 +219,10 @@ public class SkillManager {
             // Light unload: close runtime, keep state DB intact
             skills.remove(skillId);
             capManager.cancelPendingGates(skillId);
-            SkillRuntime oldRt = (SkillRuntime) old.runtime();
-            try { oldRt.close(); } catch (Exception e) { log.warn("Error closing runtime for {}: {}", skillId, e.getMessage()); }
+            try {
+                if (old.runtime() instanceof SkillRuntime sr) sr.close();
+                else if (old.runtime() instanceof BrowserSkillRuntime bsr) bsr.close();
+            } catch (Exception e) { log.warn("Error closing runtime for {}: {}", skillId, e.getMessage()); }
             a2uiEngine.unregister(skillId);
             ecosystemGuardian.forget(skillId);
         }
@@ -272,13 +292,21 @@ public class SkillManager {
 
         // Build capabilities and create sandbox runtime
         CapabilitySet capSet = capManager.inject(manifest);
-        Consumer<List<Object>> flushPatches = patches -> {
-            List<Object> applied = a2uiEngine.applyPatches(skillId, patches);
-            if (!applied.isEmpty()) {
-                eventBus.publish(new KernelEvent.A2uiPatch(skillId, applied));
-            }
-        };
-        SkillRuntime runtime = runtimePool.create(manifest, handlersJs, capSet, flushPatches);
+
+        Object runtime;
+        if ("browser-js".equals(manifest.runtime())) {
+            // Browser-js skills execute client-side — no GraalJS context needed
+            runtime = new BrowserSkillRuntime(manifest, handlersJs);
+        } else {
+            // Standard js runtime — GraalJS sandbox
+            Consumer<List<Object>> flushPatches = patches -> {
+                List<Object> applied = a2uiEngine.applyPatches(skillId, patches);
+                if (!applied.isEmpty()) {
+                    eventBus.publish(new KernelEvent.A2uiPatch(skillId, applied));
+                }
+            };
+            runtime = runtimePool.create(manifest, handlersJs, capSet, flushPatches);
+        }
 
         // Register UI tree
         a2uiEngine.register(skillId, uiTree);
@@ -288,7 +316,7 @@ public class SkillManager {
 
         LoadedSkill skill = LoadedSkill.create(manifest, runtime, uiTree);
         skills.put(skillId, skill);
-        log.info("Skill loaded: {} v{}", skillId, manifest.version());
+        log.info("Skill loaded: {} v{} ({})", skillId, manifest.version(), manifest.runtime());
         return skill;
     }
 
@@ -303,15 +331,27 @@ public class SkillManager {
 
         JsonNode tree = a2uiEngine.getTree(skillId);
         skills.put(skillId, skill.withStatus(SkillStatus.RUNNING));
-        eventBus.publish(new KernelEvent.SkillActivated(skillId, tree, List.of()));
 
-        // Fire onInit asynchronously — must not block the WS message thread.
-        // onInit may block on permission.request() which waits for user gate dialog.
-        final String id = skillId;
-        new Thread(() -> handleEvent(id, "__init__", Map.of(), INIT_TIMEOUT_SECONDS),
-            "init-" + id).start();
+        String runtime = skill.manifest().runtime();
+        String handlersJs = null;
+        Map<String, Object> capabilities = Map.of();
+        if ("browser-js".equals(runtime) && skill.runtime() instanceof BrowserSkillRuntime bsr) {
+            handlersJs = bsr.handlersJs();
+            capabilities = skill.manifest().capabilities();
+        }
 
-        log.info("Skill activated: {}", skillId);
+        eventBus.publish(new KernelEvent.SkillActivated(
+            skillId, tree, List.of(), runtime, handlersJs, capabilities));
+
+        // Fire onInit asynchronously for kernel-js only.
+        // Browser-js fires onInit on the frontend (no GraalJS).
+        if (!"browser-js".equals(runtime)) {
+            final String id = skillId;
+            new Thread(() -> handleEvent(id, "__init__", Map.of(), INIT_TIMEOUT_SECONDS),
+                "init-" + id).start();
+        }
+
+        log.info("Skill activated: {} (runtime={})", skillId, runtime);
     }
 
     public void deactivate(String skillId) {
@@ -343,6 +383,12 @@ public class SkillManager {
         }
         if (skill.status() == SkillStatus.DRAINING) {
             log.info("Rejecting event {} for {} — skill is DRAINING", eventId, skillId);
+            return;
+        }
+
+        // Browser-js skills handle events client-side — acknowledge and return
+        if ("browser-js".equals(skill.manifest().runtime())) {
+            eventBus.publish(new KernelEvent.EventAck(skillId, eventId, "ok", 0L));
             return;
         }
 
@@ -414,20 +460,23 @@ public class SkillManager {
         skills.put(skillId, skill.withStatus(SkillStatus.DRAINING));
         log.info("Skill {} entering DRAINING", skillId);
 
-        SkillRuntime runtime = (SkillRuntime) skill.runtime();
-        long deadline = System.currentTimeMillis() + 3000;
-        while (runtime.hasInflightEvents() && System.currentTimeMillis() < deadline) {
-            try { Thread.sleep(100); } catch (InterruptedException e) { break; }
-        }
-        if (runtime.hasInflightEvents()) {
-            log.warn("Skill {} has in-flight events after DRAINING timeout, force-uninstalling", skillId);
+        Object runtimeObj = skill.runtime();
+        if (runtimeObj instanceof SkillRuntime runtime) {
+            long deadline = System.currentTimeMillis() + 3000;
+            while (runtime.hasInflightEvents() && System.currentTimeMillis() < deadline) {
+                try { Thread.sleep(100); } catch (InterruptedException e) { break; }
+            }
+            if (runtime.hasInflightEvents()) {
+                log.warn("Skill {} has in-flight events after DRAINING timeout, force-uninstalling", skillId);
+            }
         }
 
         skills.remove(skillId);
         capManager.cancelPendingGates(skillId);
 
         try {
-            runtime.close();
+            if (runtimeObj instanceof SkillRuntime sr) sr.close();
+            else if (runtimeObj instanceof BrowserSkillRuntime bsr) bsr.close();
         } catch (Exception e) {
             log.warn("Error closing runtime for {}: {}", skillId, e.getMessage());
         }
@@ -472,7 +521,9 @@ public class SkillManager {
                 log.warn("Failed to save shutdown snapshot for {}", skillId, e);
             }
             try {
-                ((SkillRuntime) skill.runtime()).close();
+                Object rt = skill.runtime();
+                if (rt instanceof SkillRuntime sr) sr.close();
+                else if (rt instanceof BrowserSkillRuntime bsr) bsr.close();
             } catch (Exception e) {
                 log.warn("Failed to close runtime for {}", skillId, e);
             }

@@ -89,7 +89,7 @@ public class NetworkCapability {
         };
     }
 
-    Object executeRequest(String skillId, String url, String method,
+    public Object executeRequest(String skillId, String url, String method,
                           String body, List<String> allowlist) {
         // 1. Blacklist check
         String lower = url.toLowerCase();

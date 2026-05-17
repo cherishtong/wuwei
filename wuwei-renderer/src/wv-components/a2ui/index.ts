@@ -47,6 +47,7 @@ import { WvA2uiCarousel } from './Carousel';
 import { WvA2uiCommand } from './Command';
 import { WvA2uiSonner } from './Sonner';
 import { WvA2uiScrollArea } from './ScrollArea';
+import { WvA2uiCanvas } from './Canvas';
 
 export const wvCatalog = new Catalog(
   'https://a2ui.org/specification/v0_9/basic_catalog.json',
@@ -98,6 +99,7 @@ export const wvCatalog = new Catalog(
     WvA2uiCommand,
     WvA2uiSonner,
     WvA2uiScrollArea,
+    WvA2uiCanvas,
   ] as never,
   BASIC_FUNCTIONS
 );

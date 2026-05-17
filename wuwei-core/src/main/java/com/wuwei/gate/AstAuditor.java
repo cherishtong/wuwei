@@ -32,12 +32,24 @@ public class AstAuditor {
     private final ObjectMapper mapper;
     private final String acornJs;
 
-    // Forbidden JS identifiers — catching these prevents capability escape
-    private static final Set<String> FORBIDDEN_IDENTIFIERS = Set.of(
+    // Forbidden JS identifiers for kernel-js runtime
+    private static final Set<String> FORBIDDEN_IDENTIFIERS_JS = Set.of(
         "eval", "Function", "globalThis", "global", "window",
         "process", "require", "module", "exports",
         "__dirname", "__filename",
         "Promise", "fetch", "XMLHttpRequest",
+        "WebSocket", "import", "Worker"
+    );
+
+    // Forbidden JS identifiers for browser-js runtime.
+    // window and document are allowed — the frontend sandbox (BrowserRuntime)
+    // wraps window in a Proxy that only permits __wuwei_* bridges and safe APIs.
+    // Promise is allowed for async kernel-backed capability calls.
+    private static final Set<String> FORBIDDEN_IDENTIFIERS_BROWSER = Set.of(
+        "eval", "Function", "globalThis", "global",
+        "process", "require", "module", "exports",
+        "__dirname", "__filename",
+        "fetch", "XMLHttpRequest",
         "WebSocket", "import", "Worker"
     );
 
@@ -89,9 +101,9 @@ public class AstAuditor {
                 "id 必须是 kebab-case: " + id);
         }
         String runtime = manifest.runtime();
-        if (!"js".equals(runtime)) {
+        if (!"js".equals(runtime) && !"browser-js".equals(runtime)) {
             throw new GateException("UNSUPPORTED_RUNTIME",
-                "runtime 必须是 'js'，当前值: " + runtime);
+                "runtime 必须是 'js' 或 'browser-js'，当前值: " + runtime);
         }
         String abi = manifest.abi();
         if (abi == null || !abi.matches("^\\d+\\.\\d+$")) {
@@ -211,9 +223,16 @@ public class AstAuditor {
         }
     }
 
+    private Set<String> getForbiddenIdentifiers(SkillManifest manifest) {
+        if ("browser-js".equals(manifest.runtime())) {
+            return FORBIDDEN_IDENTIFIERS_BROWSER;
+        }
+        return FORBIDDEN_IDENTIFIERS_JS;
+    }
+
     private String buildScanScript(String code, SkillManifest manifest) {
         String escapedCode = escapeForJs(code);
-        String forbiddenJson = toJsonArray(FORBIDDEN_IDENTIFIERS);
+        String forbiddenJson = toJsonArray(getForbiddenIdentifiers(manifest));
         Set<String> declaredCaps = manifest.capabilities() != null
             ? manifest.capabilities().keySet()
             : Set.of();

@@ -1,6 +1,7 @@
 package com.wuwei.bus.event;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * Unified event model — all events flowing through the kernel are
@@ -20,14 +21,18 @@ public sealed interface KernelEvent permits
     KernelEvent.SkillLog,
     KernelEvent.SystemNotify,
     KernelEvent.GuardianWarning,
-    KernelEvent.KernelError
+    KernelEvent.KernelError,
+    KernelEvent.CapabilityProxyResult
 {
     record KernelReady(String version, int port) implements KernelEvent {}
 
     record SkillActivated(
         String skillId,
         Object ui,
-        List<Object> patches
+        List<Object> patches,
+        String runtime,
+        String handlersJs,
+        Map<String, Object> capabilities
     ) implements KernelEvent {}
 
     record A2uiPatch(
@@ -86,4 +91,11 @@ public sealed interface KernelEvent permits
     record SystemNotify(String title, String body) implements KernelEvent {}
 
     record SkillMeta(String id, String name, String status, String version) {}
+
+    record CapabilityProxyResult(
+        String skillId,
+        String requestId,
+        Object result,
+        String error
+    ) implements KernelEvent {}
 }

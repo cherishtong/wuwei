@@ -84,7 +84,7 @@ public class AiCapability {
 
     // ── Synchronous ask ───────────────────────────────────────────
 
-    Object executeAsk(String prompt) {
+    public Object executeAsk(String prompt) {
         try {
             log.info("ai.ask: {}...", prompt.length() > 80 ? prompt.substring(0, 80) : prompt);
             String body = llmClient.chatSimple(AI_SYSTEM_PROMPT, prompt);

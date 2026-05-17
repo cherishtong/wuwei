@@ -110,6 +110,10 @@ public class CapabilitySet {
 
     // ── Runtime injection ──────────────────────────────────────────
 
+    public List<String> getNetworkAllowlist() {
+        return manifest.getNetworkAllowlist();
+    }
+
     public void injectCapability(String capName) {
         Object impl = switch (capName) {
             case "storage" -> buildStorage();
