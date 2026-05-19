@@ -1,7 +1,7 @@
 {
   "version": "7.0.0",
   "piMono": {
-    "exe": "wuwei-shell/binaries/wuwei-pi.exe",
+    "exe": "wuwei-pi.exe",
     "timeoutSeconds": 60,
     "maxRepairAttempts": 2
   },

@@ -170,20 +170,32 @@ public class Main {
 
     private static String loadPiExePath(ObjectMapper mapper) {
         Path configPath = findConfigFile();
-        if (configPath == null) return null;
-        try {
-            JsonNode root = mapper.readTree(configPath.toFile());
-            if (root.has("piMono") && root.get("piMono").has("exe")) {
-                return root.get("piMono").get("exe").asText();
+        if (configPath != null) {
+            try {
+                JsonNode root = mapper.readTree(configPath.toFile());
+                if (root.has("piMono") && root.get("piMono").has("exe")) {
+                    String exePath = root.get("piMono").get("exe").asText();
+                    // Resolve relative to config file's parent (must use absolute path)
+                    Path configDir = configPath.toAbsolutePath().getParent();
+                    if (configDir != null) {
+                        Path resolved = configDir.resolve(exePath).normalize();
+                        if (Files.exists(resolved)) return resolved.toString();
+                    }
+                    // Try as-is (relative to CWD)
+                    if (Files.exists(Path.of(exePath))) return exePath;
+                }
+            } catch (Exception e) {
+                // ignore
             }
-        } catch (Exception e) {
-            // ignore
         }
-        // Fallback: check if the default dev exe path exists
-        java.nio.file.Path defaultPath = java.nio.file.Path.of("wuwei-pi", "src", "server.ts");
-        if (java.nio.file.Files.exists(defaultPath)) {
-            return "bun run wuwei-pi/src/server.ts";  // dev mode via bun
-        }
+        // Fallback 1: dev mode via bun (relative to project root, try from CWD and parent)
+        Path devPath = Path.of("wuwei-pi", "src", "server.ts");
+        if (Files.exists(devPath)) return "bun run wuwei-pi/src/server.ts";
+        // Fallback 2: unified binaries folder (check relative to CWD, then ../wuwei-shell)
+        Path binaryPath = Path.of("wuwei-pi.exe");
+        if (Files.exists(binaryPath)) return binaryPath.toAbsolutePath().toString();
+        Path binaryPath2 = Path.of("..", "wuwei-shell", "binaries", "wuwei-pi.exe");
+        if (Files.exists(binaryPath2)) return binaryPath2.toAbsolutePath().normalize().toString();
         return null;
     }
 
@@ -200,7 +212,7 @@ public class Main {
             Path.of(System.getProperty("user.home"), ".wuwei", "wuwei.json")
         };
         for (Path p : candidates) {
-            if (Files.exists(p)) return p;
+            if (Files.exists(p)) return p.toAbsolutePath().normalize();
         }
         return null;
     }

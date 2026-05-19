@@ -120,6 +120,27 @@ graalvmNative {
     }
 }
 
+// Copy native image + fat jar to unified binaries folder for Tauri bundling
+def binariesDir = layout.projectDirectory.dir('../wuwei-shell/binaries')
+
+task copyNativeToBinaries(type: Copy) {
+    dependsOn nativeCompile
+    from layout.buildDirectory.dir('native/nativeCompile')
+    into binariesDir
+    include '*.exe'
+}
+
+task copyFatJarToBinaries(type: Copy) {
+    dependsOn fatJar
+    from layout.buildDirectory.dir('libs')
+    into binariesDir
+    include 'wuwei-kernel.jar'
+}
+
+task assembleBinaries {
+    dependsOn copyNativeToBinaries, copyFatJarToBinaries
+}
+
 test {
     useJUnitPlatform()
 }
