@@ -186,4 +186,74 @@ public class StoreService {
             log.warn("ensureTable failed: {}", e.getMessage());
         }
     }
+
+    // ── Model Routing ──────────────────────────────────────────
+
+    public Map<String, String> getModelRouting(String taskType) {
+        try (PreparedStatement ps = getConn().prepareStatement(
+                "SELECT provider, model FROM model_routing WHERE task_type = ?")) {
+            ps.setString(1, taskType);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    return Map.of("provider", rs.getString("provider"),
+                                  "model", rs.getString("model"));
+                }
+            }
+        } catch (SQLException e) {
+            log.warn("getModelRouting failed: {}", e.getMessage());
+        }
+        return Map.of("provider", "openai", "model", "gpt-4o-mini");
+    }
+
+    public void updateModelRouting(String taskType, String provider, String model) {
+        try (PreparedStatement ps = getConn().prepareStatement(
+                "INSERT OR REPLACE INTO model_routing(task_type, provider, model, updated_at) " +
+                "VALUES(?, ?, ?, strftime('%s','now'))")) {
+            ps.setString(1, taskType);
+            ps.setString(2, provider);
+            ps.setString(3, model);
+            ps.executeUpdate();
+        } catch (SQLException e) {
+            log.warn("updateModelRouting failed: {}", e.getMessage());
+        }
+    }
+
+    public Map<String, Map<String, String>> listModelRouting() {
+        Map<String, Map<String, String>> result = new java.util.LinkedHashMap<>();
+        try (Statement stmt = getConn().createStatement();
+             ResultSet rs = stmt.executeQuery(
+                 "SELECT task_type, provider, model FROM model_routing")) {
+            while (rs.next()) {
+                result.put(rs.getString("task_type"), Map.of(
+                    "provider", rs.getString("provider"),
+                    "model", rs.getString("model")
+                ));
+            }
+        } catch (SQLException e) {
+            log.warn("listModelRouting failed: {}", e.getMessage());
+        }
+        return result;
+    }
+
+    // ── Model Usage Log ────────────────────────────────────────
+
+    public void recordModelUsage(String taskType, String provider, String model,
+                                  int inputTokens, int outputTokens,
+                                  int latencyMs, double cost) {
+        try (PreparedStatement ps = getConn().prepareStatement(
+                "INSERT INTO model_usage_log(task_type, provider, model, " +
+                "input_tokens, output_tokens, latency_ms, cost) " +
+                "VALUES(?, ?, ?, ?, ?, ?, ?)")) {
+            ps.setString(1, taskType);
+            ps.setString(2, provider);
+            ps.setString(3, model);
+            ps.setInt(4, inputTokens);
+            ps.setInt(5, outputTokens);
+            ps.setInt(6, latencyMs);
+            ps.setDouble(7, cost);
+            ps.executeUpdate();
+        } catch (SQLException e) {
+            log.warn("recordModelUsage failed: {}", e.getMessage());
+        }
+    }
 }

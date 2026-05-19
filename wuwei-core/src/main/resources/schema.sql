@@ -1,5 +1,4 @@
--- Wuwei Core Schema v6.4.0
--- W2: All tables initialized
+-- Wuwei Core Schema v7.0.0
 
 PRAGMA journal_mode=WAL;
 PRAGMA synchronous=NORMAL;
@@ -86,3 +85,31 @@ CREATE TABLE IF NOT EXISTS trace_log (
 
 CREATE INDEX IF NOT EXISTS idx_trace_skill_time
     ON trace_log(skill_id, timestamp);
+
+-- Model routing (which model to use per task type)
+CREATE TABLE IF NOT EXISTS model_routing (
+    task_type  TEXT PRIMARY KEY,   -- 'skill/generate' | 'skill/repair' | 'skill/drift' | 'ai/ask'
+    provider   TEXT NOT NULL,      -- 'openai' | 'anthropic' | 'deepseek' | 'google'
+    model      TEXT NOT NULL,      -- 'gpt-4o' | 'claude-sonnet-4-20250514' | ...
+    updated_at INTEGER DEFAULT (strftime('%s','now'))
+);
+
+-- Default routing (inserted only if table is empty)
+INSERT OR IGNORE INTO model_routing(task_type, provider, model) VALUES
+    ('skill/generate',  'openai',    'gpt-4o'),
+    ('skill/repair',    'openai',    'gpt-4o-mini'),
+    ('skill/drift',     'openai',    'gpt-4o-mini'),
+    ('ai/ask',          'openai',    'gpt-4o-mini');
+
+-- LLM usage log (token + cost tracking per call)
+CREATE TABLE IF NOT EXISTS model_usage_log (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_type     TEXT NOT NULL,
+    provider      TEXT NOT NULL,
+    model         TEXT NOT NULL,
+    input_tokens  INTEGER DEFAULT 0,
+    output_tokens INTEGER DEFAULT 0,
+    latency_ms    INTEGER DEFAULT 0,
+    cost          REAL DEFAULT 0.0,
+    created_at    INTEGER DEFAULT (strftime('%s','now'))
+);

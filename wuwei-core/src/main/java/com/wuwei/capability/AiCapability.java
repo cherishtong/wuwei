@@ -1,12 +1,16 @@
 package com.wuwei.capability;
 
 import com.wuwei.llm.LlmClient;
+import com.wuwei.llm.PiMonoAdapter;
+import com.wuwei.llm.PiMonoException;
+import com.wuwei.store.StoreService;
 import org.graalvm.polyglot.Value;
 import org.graalvm.polyglot.proxy.ProxyExecutable;
 import org.graalvm.polyglot.proxy.ProxyObject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
@@ -16,9 +20,7 @@ import java.util.function.Consumer;
  * Exposes {@code capability.ai.ask(prompt)} → {status, body}
  * and {@code capability.ai.askStream(prompt, onChunk, onDone)} for streaming.
  *
- * Streaming uses per-skill {@link Consumer<Runnable>} enqueue functions
- * registered by each SkillRuntime to ensure JS callbacks execute on
- * the correct single-threaded event loop.
+ * Uses PiMonoAdapter as primary path; falls back to built-in LlmClient.
  */
 public class AiCapability {
 
@@ -33,24 +35,23 @@ public class AiCapability {
         """;
 
     private final LlmClient llmClient;
+    private final PiMonoAdapter piAdapter;
+    private final StoreService storeService;
 
-    /** Per-skill enqueue functions for streaming callbacks. */
     private final ConcurrentHashMap<String, Consumer<Runnable>> enqueues = new ConcurrentHashMap<>();
 
-    public AiCapability(LlmClient llmClient) {
+    public AiCapability(LlmClient llmClient, PiMonoAdapter piAdapter, StoreService storeService) {
         this.llmClient = llmClient;
+        this.piAdapter = piAdapter;
+        this.storeService = storeService;
     }
 
-    /** Register the skill's event-loop enqueue function. Called by SkillRuntime. */
     public void registerEnqueue(String skillId, Consumer<Runnable> enqueue) {
         enqueues.put(skillId, enqueue);
-        log.info("ai stream enqueue registered for {}", skillId);
     }
 
-    /** Remove the skill's enqueue on unload. */
     public void unregisterEnqueue(String skillId) {
         enqueues.remove(skillId);
-        log.info("ai stream enqueue unregistered for {}", skillId);
     }
 
     public ProxyObject forSkill(String skillId) {
@@ -59,7 +60,7 @@ public class AiCapability {
             public Object getMember(String key) {
                 return switch (key) {
                     case "ask" -> (ProxyExecutable) args ->
-                        executeAsk(args[0].asString());
+                        executeAsk(skillId, args[0].asString());
                     case "askStream" -> (ProxyExecutable) args ->
                         executeAskStream(skillId, args);
                     default -> null;
@@ -84,9 +85,23 @@ public class AiCapability {
 
     // ── Synchronous ask ───────────────────────────────────────────
 
-    public Object executeAsk(String prompt) {
+    public Object executeAsk(String skillId, String prompt) {
+        log.info("ai.ask [{}]: {}...", skillId,
+            prompt.length() > 80 ? prompt.substring(0, 80) : prompt);
+
+        // Try PI first
+        if (piAdapter != null) {
+            try {
+                Map<String, String> model = storeService.getModelRouting("ai/ask");
+                PiMonoAdapter.AiResult result = piAdapter.aiAsk(skillId, prompt, model);
+                return responseProxy(result.status(), result.body());
+            } catch (PiMonoException e) {
+                log.warn("PI ai/ask failed, falling back to LlmClient: {}", e.getMessage());
+            }
+        }
+
+        // Fallback
         try {
-            log.info("ai.ask: {}...", prompt.length() > 80 ? prompt.substring(0, 80) : prompt);
             String body = llmClient.chatSimple(AI_SYSTEM_PROMPT, prompt);
             return responseProxy(200, body);
         } catch (Exception e) {
@@ -99,8 +114,8 @@ public class AiCapability {
 
     private Object executeAskStream(String skillId, Value[] args) {
         String prompt = args[0].asString();
-        Value onChunk = args[1];                 // function(chunkText)
-        Value onDone = args.length > 2 ? args[2] : null; // optional function()
+        Value onChunk = args[1];
+        Value onDone = args.length > 2 ? args[2] : null;
 
         if (!onChunk.canExecute()) {
             log.warn("askStream: onChunk is not executable for {}", skillId);
@@ -109,41 +124,61 @@ public class AiCapability {
 
         Consumer<Runnable> enqueue = enqueues.get(skillId);
         if (enqueue == null) {
-            log.warn("askStream: no enqueue registered for {} — stream not started", skillId);
-            // Fall back to synchronous ask — deliver full body as one chunk
-            Object syncResult = executeAsk(prompt);
+            log.warn("askStream: no enqueue registered for {}", skillId);
+            Object syncResult = executeAsk(skillId, prompt);
             if (syncResult instanceof ProxyObject po) {
                 Object body = po.getMember("body");
                 if (body instanceof String s) {
                     try { onChunk.execute(s); }
-                    catch (Exception e) { log.warn("onChunk error: {}", e.getMessage()); }
+                    catch (Exception ex) { log.warn("onChunk error: {}", ex.getMessage()); }
                 }
             }
             if (onDone != null && onDone.canExecute()) {
                 try { onDone.execute(); }
-                catch (Exception e) { log.warn("onDone error: {}", e.getMessage()); }
+                catch (Exception ex) { log.warn("onDone error: {}", ex.getMessage()); }
             }
             return null;
         }
 
+        // Try PI streaming first
+        if (piAdapter != null) {
+            Map<String, String> model = storeService.getModelRouting("ai/ask");
+            piAdapter.aiAskStream(skillId, prompt, model,
+                text -> enqueue.accept(() -> {
+                    try { onChunk.execute(text); }
+                    catch (Exception ex) { log.warn("onChunk error: {}", ex.getMessage()); }
+                }),
+                () -> {
+                    if (onDone != null && onDone.canExecute()) {
+                        enqueue.accept(() -> {
+                            try { onDone.execute(); }
+                            catch (Exception ex) { log.warn("onDone error: {}", ex.getMessage()); }
+                        });
+                    }
+                }
+            );
+            return null;
+        }
+
+        // Fallback to LlmClient streaming
         Thread streamThread = new Thread(() -> {
             try {
                 llmClient.chatStream(AI_SYSTEM_PROMPT, prompt,
                     text -> enqueue.accept(() -> {
                         try { onChunk.execute(text); }
-                        catch (Exception e) { log.warn("onChunk error: {}", e.getMessage()); }
+                        catch (Exception ex) { log.warn("onChunk error: {}", ex.getMessage()); }
                     }),
                     () -> {
                         if (onDone != null && onDone.canExecute()) {
                             enqueue.accept(() -> {
                                 try { onDone.execute(); }
-                                catch (Exception e) { log.warn("onDone error: {}", e.getMessage()); }
+                                catch (Exception ex) { log.warn("onDone error: {}", ex.getMessage()); }
                             });
                         }
                     },
                     err -> enqueue.accept(() -> {
                         try { onChunk.execute("ERROR: " + err); }
-                        catch (Exception e) { log.warn("onChunk(error) error: {}", e.getMessage()); }
+                        catch (Exception ex) { log.warn("onChunk(error) error: {}", ex.getMessage()); }
                     })
                 );
             } catch (Exception e) {
@@ -153,7 +188,7 @@ public class AiCapability {
         streamThread.setDaemon(true);
         streamThread.start();
 
-        return null; // Returns immediately — streaming continues via callbacks
+        return null;
     }
 
     // ── Response proxy factory ────────────────────────────────────

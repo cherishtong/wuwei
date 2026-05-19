@@ -165,7 +165,7 @@ public class CapabilityManager {
             return switch (capName) {
                 case "storage" -> executeStorageProxy(skillId, method, args);
                 case "network" -> executeNetworkProxy(skillId, method, args);
-                case "ai" -> executeAiProxy(method, args);
+                case "ai" -> executeAiProxy(skillId, method, args);
                 case "file" -> executeFileProxy(skillId, method, args);
                 case "os" -> executeOsProxy(method, args);
                 default -> Map.of("error", "Unknown capability: " + capName);
@@ -218,10 +218,10 @@ public class CapabilityManager {
         return Map.of("error", "Unknown network method: " + method);
     }
 
-    private Object executeAiProxy(String method, List<Object> args) {
+    private Object executeAiProxy(String skillId, String method, List<Object> args) {
         if ("ask".equals(method)) {
             String prompt = (String) args.get(0);
-            var result = aiCap.executeAsk(prompt);
+            var result = aiCap.executeAsk(skillId, prompt);
             if (result instanceof org.graalvm.polyglot.proxy.ProxyObject po) {
                 Map<String, Object> plain = new LinkedHashMap<>();
                 plain.put("status", po.getMember("status"));

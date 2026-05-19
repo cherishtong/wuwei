@@ -16,10 +16,14 @@ import com.wuwei.llm.LlmClient;
 import com.wuwei.llm.LlmConfig;
 import com.wuwei.llm.Normalizer;
 import com.wuwei.llm.SkillGenerator;
+import com.wuwei.llm.PiMonoProcess;
+import com.wuwei.llm.PiMonoClient;
+import com.wuwei.llm.PiMonoAdapter;
 import com.wuwei.sandbox.RuntimePool;
 import com.wuwei.skill.SkillManager;
 import com.wuwei.snapshot.SnapshotService;
 import com.wuwei.store.OpLogService;
+import com.wuwei.store.SkillMemoryService;
 import com.wuwei.store.SkillStateStore;
 import com.wuwei.store.StoreService;
 
@@ -47,6 +51,8 @@ public class Main {
         StoreService storeService = new StoreService(mapper);
         storeService.initSchema();
 
+        SkillMemoryService memoryService = new SkillMemoryService(mapper);
+
         OpLogService opLog = new OpLogService(storeService);
         EventBus eventBus = new EventBus(mapper, opLog);
 
@@ -55,10 +61,35 @@ public class Main {
         FileCapability fileCap = new FileCapability();
         SkillStateStore stateStore = new SkillStateStore();
 
-        // ── LLM config loaded early (needed by AiCapability) ──
+        // ── LLM config loaded early ──
         LlmConfig llmConfig = loadLlmConfig(mapper);
         LlmClient llmClient = new LlmClient(llmConfig, mapper);
-        AiCapability aiCap = new AiCapability(llmClient);
+
+        // ── Pi AI pipeline (primary path, starts before skill init) ──
+        PiMonoProcess piProcess = null;
+        PiMonoClient piClient = null;
+        PiMonoAdapter piAdapter = null;
+        String piExePath = loadPiExePath(mapper);
+        if (piExePath != null) {
+            try {
+                piProcess = new PiMonoProcess(piExePath);
+                piProcess.start();
+                piClient = new PiMonoClient(piProcess, eventBus, mapper);
+                piClient.startReadLoop();
+                piAdapter = new PiMonoAdapter(piClient, eventBus, mapper);
+                System.out.println("[kernel] Pi AI pipeline initialized");
+            } catch (Exception e) {
+                System.out.println("[kernel] Pi AI pipeline init failed: " + e.getMessage()
+                    + " — falling back to built-in LLM client");
+                piProcess = null;
+                piClient = null;
+                piAdapter = null;
+            }
+        } else {
+            System.out.println("[kernel] Pi exe not found, using built-in LLM client");
+        }
+
+        AiCapability aiCap = new AiCapability(llmClient, piAdapter, storeService);
 
         CapabilityManager capManager = new CapabilityManager(stateStore, networkCap, fileCap, aiCap, eventBus);
         RuntimePool runtimePool = new RuntimePool();
@@ -73,15 +104,16 @@ public class Main {
         );
         skillManager.startupLoad();
 
-        // ── Set up LLM pipeline ──────────────────────────────
+        // ── Set up LLM pipeline (existing path, kept for fallback) ──
         Normalizer normalizer = new Normalizer(mapper);
         SkillGenerator skillGenerator = new SkillGenerator(
-            llmClient, normalizer, astAuditor, guardian,
+            llmClient, piAdapter, memoryService, storeService,
+            normalizer, astAuditor, guardian,
             skillManager, snapshotService, eventBus, mapper,
             loadMaxRepairAttempts(mapper)
         );
 
-        MessageRouter router = new MessageRouter(mapper, eventBus, skillManager, capManager, skillGenerator);
+        MessageRouter router = new MessageRouter(mapper, eventBus, skillManager, capManager, skillGenerator, piAdapter, storeService);
 
         // ── Start WebSocket server (Helidon picks random port) ─
         WsServer wsServer = new WsServer(0, router, eventBus);
@@ -92,9 +124,11 @@ public class Main {
         System.out.println("WUWEI_PORT:" + PORT);
 
         // W9: Graceful shutdown hook — saves snapshots before exit
+        PiMonoProcess piProcessFinal = piProcess;
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             System.out.println("[kernel] Shutdown signal received, saving snapshots...");
             skillManager.shutdown();
+            if (piProcessFinal != null) piProcessFinal.stop();
             System.out.println("[kernel] Shutdown complete");
         }, "shutdown-hook"));
 
@@ -132,6 +166,25 @@ public class Main {
         } catch (Exception e) {
             return 10;
         }
+    }
+
+    private static String loadPiExePath(ObjectMapper mapper) {
+        Path configPath = findConfigFile();
+        if (configPath == null) return null;
+        try {
+            JsonNode root = mapper.readTree(configPath.toFile());
+            if (root.has("piMono") && root.get("piMono").has("exe")) {
+                return root.get("piMono").get("exe").asText();
+            }
+        } catch (Exception e) {
+            // ignore
+        }
+        // Fallback: check if the default dev exe path exists
+        java.nio.file.Path defaultPath = java.nio.file.Path.of("wuwei-pi", "src", "server.ts");
+        if (java.nio.file.Files.exists(defaultPath)) {
+            return "bun run wuwei-pi/src/server.ts";  // dev mode via bun
+        }
+        return null;
     }
 
     private static Path findConfigFile() {

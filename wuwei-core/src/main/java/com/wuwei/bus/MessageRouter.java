@@ -5,7 +5,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.wuwei.bus.event.KernelEvent;
 import com.wuwei.capability.CapabilityManager;
 import com.wuwei.llm.SkillGenerator;
+import com.wuwei.llm.PiMonoAdapter;
 import com.wuwei.skill.SkillManager;
+import com.wuwei.store.StoreService;
 import io.helidon.websocket.WsSession;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -29,15 +31,20 @@ public class MessageRouter {
     private final SkillManager skillManager;
     private final CapabilityManager capManager;
     private final SkillGenerator skillGenerator;
+    private final PiMonoAdapter piAdapter;
+    private final StoreService storeService;
 
     public MessageRouter(ObjectMapper mapper, EventBus eventBus,
                          SkillManager skillManager, CapabilityManager capManager,
-                         SkillGenerator skillGenerator) {
+                         SkillGenerator skillGenerator, PiMonoAdapter piAdapter,
+                         StoreService storeService) {
         this.mapper = mapper;
         this.eventBus = eventBus;
         this.skillManager = skillManager;
         this.capManager = capManager;
         this.skillGenerator = skillGenerator;
+        this.piAdapter = piAdapter;
+        this.storeService = storeService;
     }
 
     public EventBus eventBus() {
@@ -70,6 +77,7 @@ public class MessageRouter {
                 case "get-skill-source" -> handleGetSkillSource(session, msg);
                 case "revoke-cap"         -> handleRevokeCap(session, msg);
                 case "capability-proxy" -> handleCapabilityProxy(session, msg);
+                case "set-model-routing" -> handleSetModelRouting(session, msg);
                 default -> sendError(session, "system", "UNKNOWN_TYPE", "Unknown message type: " + type);
             }
         } catch (Exception e) {
@@ -320,6 +328,25 @@ public class MessageRouter {
             eventBus.publishTo(session, new KernelEvent.KernelError(skillId, "SOURCE_READ_ERROR",
                 "无法读取源代码: " + e.getMessage()));
         }
+    }
+
+    // ── Model routing ─────────────────────────────────────────────
+
+    private void handleSetModelRouting(WsSession session, JsonNode msg) {
+        String taskType = msg.has("taskType") ? msg.get("taskType").asText() : "";
+        String provider = msg.has("provider") ? msg.get("provider").asText() : "";
+        String model = msg.has("model") ? msg.get("model").asText() : "";
+
+        if (taskType.isBlank() || provider.isBlank() || model.isBlank()) {
+            eventBus.publishTo(session, new KernelEvent.KernelError("system", "INVALID_ROUTING",
+                "set-model-routing requires taskType, provider, and model"));
+            return;
+        }
+
+        log.info("set-model-routing: taskType={} -> {}/{}", taskType, provider, model);
+        storeService.updateModelRouting(taskType, provider, model);
+        eventBus.publishTo(session, new KernelEvent.SystemNotify(
+            "模型路由已更新", taskType + " → " + provider + "/" + model));
     }
 
     // ── helpers ──────────────────────────────────────────────────

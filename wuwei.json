@@ -1,5 +1,10 @@
 {
-  "version": "6.4.0",
+  "version": "7.0.0",
+  "piMono": {
+    "exe": "bun run wuwei-pi/src/server.ts",
+    "timeoutSeconds": 60,
+    "maxRepairAttempts": 2
+  },
   "llm": {
     "provider": "deepseek",
     "model": "deepseek-v4-pro",

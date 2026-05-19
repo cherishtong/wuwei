@@ -22,7 +22,8 @@ public sealed interface KernelEvent permits
     KernelEvent.SystemNotify,
     KernelEvent.GuardianWarning,
     KernelEvent.KernelError,
-    KernelEvent.CapabilityProxyResult
+    KernelEvent.CapabilityProxyResult,
+    KernelEvent.PiLog
 {
     record KernelReady(String version, int port) implements KernelEvent {}
 
@@ -97,5 +98,12 @@ public sealed interface KernelEvent permits
         String requestId,
         Object result,
         String error
+    ) implements KernelEvent {}
+
+    record PiLog(
+        String level,
+        String message,
+        String data,
+        long timestamp
     ) implements KernelEvent {}
 }

@@ -11,6 +11,8 @@ import com.wuwei.skill.SkillGenome;
 import com.wuwei.skill.SkillManager;
 import com.wuwei.skill.SkillManifest;
 import com.wuwei.snapshot.SnapshotService;
+import com.wuwei.store.SkillMemoryService;
+import com.wuwei.store.StoreService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -19,20 +21,26 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 /**
  * Full Skill generation pipeline:
- * intent → LLM → parse → normalize → audit → repair loop (max 2) → save → load → activate.
+ * intent → PI (or LLM fallback) → parse → normalize → audit → repair loop → save → load → activate.
  *
- * Publishes PlanStep and RepairAttempt events at each stage so the frontend
- * can show progress.
+ * When PiMonoAdapter is available, uses the PI framework for LLM calls with
+ * model routing from StoreService and memory persistence via SkillMemoryService.
+ * Falls back to built-in LlmClient when PI is not running.
  */
 public class SkillGenerator {
 
     private static final Logger log = LoggerFactory.getLogger(SkillGenerator.class);
 
     private final LlmClient llmClient;
+    private final PiMonoAdapter piAdapter;
+    private final SkillMemoryService memoryService;
+    private final StoreService storeService;
     private final Normalizer normalizer;
     private final AstAuditor astAuditor;
     private final EcosystemGuardian guardian;
@@ -47,12 +55,17 @@ public class SkillGenerator {
     private final String repairPrompt;
     private final String refinePrompt;
 
-    public SkillGenerator(LlmClient llmClient, Normalizer normalizer,
+    public SkillGenerator(LlmClient llmClient, PiMonoAdapter piAdapter,
+                          SkillMemoryService memoryService, StoreService storeService,
+                          Normalizer normalizer,
                           AstAuditor astAuditor, EcosystemGuardian guardian,
                           SkillManager skillManager, SnapshotService snapshotService,
                           EventBus eventBus, ObjectMapper mapper,
                           int maxRepairAttempts) {
         this.llmClient = llmClient;
+        this.piAdapter = piAdapter;
+        this.memoryService = memoryService;
+        this.storeService = storeService;
         this.normalizer = normalizer;
         this.astAuditor = astAuditor;
         this.guardian = guardian;
@@ -73,21 +86,32 @@ public class SkillGenerator {
     // ── Public API ──────────────────────────────────────────────
 
     public boolean enabled() {
-        return llmClient.config().enabled();
+        return piAdapter != null || llmClient.config().enabled();
     }
 
-    /**
-     * Refine an existing Skill based on user feedback.
-     * Reads current files, sends to LLM with refine prompt, re-installs the skill.
-     */
-    public String refine(String skillId, String feedback) {
+    public String generate(String intent) {
         if (!enabled()) {
             eventBus.publish(new KernelEvent.PlanStep("error",
-                "LLM 未配置。请设置 " + llmClient.config().apiKeyEnv() + " 环境变量"));
+                "LLM 未配置。请设置 OPENAI_API_KEY 环境变量或启动 PI 进程"));
             return null;
         }
 
-        // Read current skill files from disk
+        String existingSummary = existingSkillsSummary();
+        Map<String, String> model = getModelRouting("skill/generate");
+
+        if (piAdapter != null) {
+            return generateViaPi(intent, existingSummary, model);
+        }
+        return generateViaLlm(intent, existingSummary);
+    }
+
+    public String refine(String skillId, String feedback) {
+        if (!enabled()) {
+            eventBus.publish(new KernelEvent.PlanStep("error",
+                "LLM 未配置。请设置 OPENAI_API_KEY 环境变量或启动 PI 进程"));
+            return null;
+        }
+
         Path skillDir = Paths.get(skillsBaseDir, skillId);
         Path genomeDir = skillDir.resolve("genome");
         if (!Files.isDirectory(skillDir)) {
@@ -107,107 +131,122 @@ public class SkillGenerator {
             return null;
         }
 
-        // ── Stage 1: LLM refine ────────────────────────────────
+        if (piAdapter != null) {
+            return refineViaPi(skillId, feedback, skillJson, uiJson, handlersJs);
+        }
+        return refineViaLlm(skillId, feedback, skillJson, uiJson, handlersJs);
+    }
+
+    // ── PI path (primary) ──────────────────────────────────────
+
+    private String generateViaPi(String intent, String existingSummary, Map<String, String> model) {
         eventBus.publish(new KernelEvent.PlanStep("generating",
-            "正在优化 Skill " + skillId + "（调用 " + llmClient.config().model() + "）..."));
+            "正在生成 Skill（PI: " + model.get("provider") + "/" + model.get("model") + "）..."));
 
-        // Inject skillId into refine prompt so LLM knows not to change it
-        String refinePromptWithId = refinePrompt.replace("{ORIGINAL_SKILL_ID}", skillId);
-
-        SkillFiles raw;
+        PiMonoAdapter.SkillGenerationResult genResult;
         try {
-            raw = llmClient.refine(refinePromptWithId, skillJson, uiJson, handlersJs, feedback);
-        } catch (Exception e) {
-            log.error("LLM refine failed", e);
-            eventBus.publish(new KernelEvent.PlanStep("error",
-                "LLM 调用失败: " + e.getMessage()));
-            return null;
+            genResult = piAdapter.generate(intent,
+                List.of(existingSummary.split("\n")),
+                model,
+                null, // no memory for new skill
+                null  // no current files
+            );
+        } catch (PiMonoException e) {
+            log.error("PI generation failed, falling back to LlmClient", e);
+            return generateViaLlm(intent, existingSummary);
         }
 
-        // ── Stage 2: Force-preserve original skill id ───────────
+        SkillFiles raw = genResult.files();
+        SkillFiles normalized = normalizer.normalize(raw);
+
+        // Persist memory if this is a first-time generation
+        if (genResult.memoryDelta() != null) {
+            try {
+                String skillId = extractSkillId(normalized.skillJson());
+                memoryService.writeIntent(skillId, intent);
+                memoryService.appendEvolution(skillId, "genesis", "user-intent",
+                    "Initial generation from intent: " + intent);
+                if (genResult.memoryDelta().designDecision() != null) {
+                    memoryService.appendDesign(skillId, "Initial Design",
+                        genResult.memoryDelta().designDecision());
+                }
+            } catch (Exception e) {
+                log.warn("Failed to persist memory: {}", e.getMessage());
+            }
+        }
+
+        return auditAndInstall(normalized);
+    }
+
+    private String refineViaPi(String skillId, String feedback,
+                                String skillJson, String uiJson, String handlersJs) {
+        Map<String, String> model = getModelRouting("skill/generate");
+
+        eventBus.publish(new KernelEvent.PlanStep("generating",
+            "正在优化 Skill " + skillId + "（PI: " + model.get("provider") + "/" + model.get("model") + "）..."));
+
+        // Build memory context from existing skill
+        String originalIntent = memoryService.readIntent(skillId);
+        List<Map<String, Object>> evolution = memoryService.readEvolution(skillId, 10);
+        String design = memoryService.readDesign(skillId);
+
+        Map<String, Object> memory = null;
+        if (originalIntent != null || !evolution.isEmpty() || design != null) {
+            memory = new java.util.LinkedHashMap<>();
+            if (originalIntent != null) memory.put("originalIntent", originalIntent);
+            if (!evolution.isEmpty()) memory.put("recentEvolution", evolution);
+            if (design != null) memory.put("recentDecisions", design);
+        }
+
+        PiMonoAdapter.SkillGenerationResult genResult;
+        try {
+            genResult = piAdapter.generate(
+                "Refine skill based on feedback: " + feedback,
+                List.of(),
+                model,
+                memory,
+                Map.of("skillJson", skillJson, "uiJson", uiJson, "handlersJs", handlersJs)
+            );
+        } catch (PiMonoException e) {
+            log.error("PI refine failed, falling back to LlmClient", e);
+            return refineViaLlm(skillId, feedback, skillJson, uiJson, handlersJs);
+        }
+
+        SkillFiles raw = genResult.files();
         SkillFiles rawFixed = new SkillFiles(
             forceSkillId(raw.skillJson(), skillId),
             raw.uiJson(),
             raw.handlersJs()
         );
-
-        // ── Stage 3: Normalize ─────────────────────────────────
-        eventBus.publish(new KernelEvent.PlanStep("normalizing",
-            "正在规范化输出..."));
         SkillFiles normalized = normalizer.normalize(rawFixed);
 
-        // ── Stage 4: Audit + Repair loop ───────────────────────
-        SkillFiles finalFiles = normalized;
-        for (int attempt = 0; attempt <= maxRepairAttempts; attempt++) {
-            try {
-                SkillManifest manifest;
-                try {
-                    manifest = mapper.readValue(finalFiles.skillJson(), SkillManifest.class);
-                } catch (Exception e) {
-                    throw new GateException("INVALID_MANIFEST",
-                        "skill.json 解析失败: " + e.getMessage());
-                }
-
-                SkillGenome genome = new SkillGenome(finalFiles.uiJson(), finalFiles.handlersJs());
-
-                eventBus.publish(new KernelEvent.PlanStep("auditing",
-                    "正在审计 Skill " + manifest.id() + "..."));
-
-                astAuditor.audit(manifest, genome);
-                guardian.check(manifest.id(), genome);
-
-                // Install new version (installSkill handles file rewrite + reload + activate)
-                return installSkill(manifest, finalFiles);
-
-            } catch (GateException e) {
-                String errorDetail = "[" + e.getCode() + "] " + e.getMessage();
-                log.warn("Refine audit failed (attempt {}): {}", attempt + 1, errorDetail);
-
-                eventBus.publish(new KernelEvent.RepairAttempt(skillId, attempt + 1, errorDetail));
-
-                if (attempt >= maxRepairAttempts) {
-                    eventBus.publish(new KernelEvent.PlanStep("error",
-                        "优化修复已耗尽（" + maxRepairAttempts + " 次），最后的错误: " + errorDetail));
-                    return null;
-                }
-
-                eventBus.publish(new KernelEvent.PlanStep("repairing",
-                    "第 " + (attempt + 1) + "/" + maxRepairAttempts + " 次修复中: " + e.getCode()));
-
-                try {
-                    SkillFiles repaired = llmClient.repair(repairPrompt, finalFiles, errorDetail, attempt + 1);
-                    // Force-preserve original skill id after repair too
-                    SkillFiles repairedFixed = new SkillFiles(
-                        forceSkillId(repaired.skillJson(), skillId),
-                        repaired.uiJson(),
-                        repaired.handlersJs()
-                    );
-                    finalFiles = normalizer.normalize(repairedFixed);
-                } catch (Exception repairEx) {
-                    log.error("Repair LLM call failed", repairEx);
-                    eventBus.publish(new KernelEvent.PlanStep("error",
-                        "修复调用失败: " + repairEx.getMessage()));
-                    return null;
-                }
-            }
+        // Append to evolution log
+        memoryService.appendEvolution(skillId, "refine", "user-feedback", feedback);
+        if (genResult.memoryDelta() != null && genResult.memoryDelta().designDecision() != null) {
+            memoryService.appendDesign(skillId, "Refine: " + feedback.substring(0, Math.min(60, feedback.length())),
+                genResult.memoryDelta().designDecision());
         }
-        return null;
+
+        return auditAndInstall(normalized);
     }
 
-    /**
-     * Full generation pipeline. Returns the skill ID on success, null on failure.
-     * Publishes PlanStep at each stage.
-     */
-    public String generate(String intent) {
-        if (!enabled()) {
-            eventBus.publish(new KernelEvent.PlanStep("error",
-                "LLM 未配置。请设置 " + llmClient.config().apiKeyEnv() + " 环境变量并配置 wuwei.json"));
-            return null;
+    private SkillFiles piRepair(SkillFiles current, String skillId, String error, int attempt) throws PiMonoException {
+        Map<String, String> model = getModelRouting("skill/repair");
+        String originalIntent = memoryService.readIntent(skillId);
+        List<Map<String, Object>> evolution = memoryService.readEvolution(skillId, 5);
+
+        Map<String, Object> memory = null;
+        if (originalIntent != null) {
+            memory = new java.util.LinkedHashMap<>();
+            memory.put("originalIntent", originalIntent);
         }
 
-        String existingSummary = existingSkillsSummary();
+        return piAdapter.repair(current, skillId, error, attempt, model, memory);
+    }
 
-        // ── Stage 1: LLM generation ───────────────────────────
+    // ── LlmClient path (fallback) ────────────────────────────────
+
+    private String generateViaLlm(String intent, String existingSummary) {
         eventBus.publish(new KernelEvent.PlanStep("generating",
             "正在生成 Skill（调用 " + llmClient.config().model() + "）..."));
 
@@ -221,16 +260,48 @@ public class SkillGenerator {
             return null;
         }
 
-        // ── Stage 2: Normalize ───────────────────────────────
-        eventBus.publish(new KernelEvent.PlanStep("normalizing",
-            "正在规范化输出..."));
         SkillFiles normalized = normalizer.normalize(raw);
+        return auditAndInstall(normalized);
+    }
 
-        // ── Stage 3: Audit + Repair loop ─────────────────────
-        SkillFiles finalFiles = normalized;
+    private String refineViaLlm(String skillId, String feedback,
+                                 String skillJson, String uiJson, String handlersJs) {
+        eventBus.publish(new KernelEvent.PlanStep("generating",
+            "正在优化 Skill " + skillId + "（调用 " + llmClient.config().model() + "）..."));
+
+        String refinePromptWithId = refinePrompt.replace("{ORIGINAL_SKILL_ID}", skillId);
+
+        SkillFiles raw;
+        try {
+            raw = llmClient.refine(refinePromptWithId, skillJson, uiJson, handlersJs, feedback);
+        } catch (Exception e) {
+            log.error("LLM refine failed", e);
+            eventBus.publish(new KernelEvent.PlanStep("error",
+                "LLM 调用失败: " + e.getMessage()));
+            return null;
+        }
+
+        SkillFiles rawFixed = new SkillFiles(
+            forceSkillId(raw.skillJson(), skillId),
+            raw.uiJson(),
+            raw.handlersJs()
+        );
+        SkillFiles normalized = normalizer.normalize(rawFixed);
+        return auditAndInstall(normalized);
+    }
+
+    private SkillFiles llmRepair(SkillFiles current, String error, int attempt) throws Exception {
+        return llmClient.repair(repairPrompt, current, error, attempt);
+    }
+
+    // ── Shared: Audit + Repair loop + Install ────────────────────
+
+    private String auditAndInstall(SkillFiles initialFiles) {
+        eventBus.publish(new KernelEvent.PlanStep("normalizing", "正在规范化输出..."));
+        SkillFiles finalFiles = initialFiles;
+
         for (int attempt = 0; attempt <= maxRepairAttempts; attempt++) {
             try {
-                // Validate JSON parseable
                 SkillManifest manifest;
                 try {
                     manifest = mapper.readValue(finalFiles.skillJson(), SkillManifest.class);
@@ -247,15 +318,14 @@ public class SkillGenerator {
                 astAuditor.audit(manifest, genome);
                 guardian.check(manifest.id(), genome);
 
-                // Audit passed — install the skill
                 return installSkill(manifest, finalFiles);
 
             } catch (GateException e) {
                 String errorDetail = "[" + e.getCode() + "] " + e.getMessage();
                 log.warn("Audit failed (attempt {}): {}", attempt + 1, errorDetail);
 
-                eventBus.publish(new KernelEvent.RepairAttempt(
-                    extractSkillId(finalFiles.skillJson()), attempt + 1, errorDetail));
+                String skillId = extractSkillId(finalFiles.skillJson());
+                eventBus.publish(new KernelEvent.RepairAttempt(skillId, attempt + 1, errorDetail));
 
                 if (attempt >= maxRepairAttempts) {
                     eventBus.publish(new KernelEvent.PlanStep("error",
@@ -263,25 +333,34 @@ public class SkillGenerator {
                     return null;
                 }
 
-                // ── Repair ────────────────────────────────────
                 eventBus.publish(new KernelEvent.PlanStep("repairing",
                     "第 " + (attempt + 1) + "/" + maxRepairAttempts + " 次修复中: " + e.getCode()));
 
                 try {
-                    finalFiles = normalizer.normalize(
-                        llmClient.repair(repairPrompt, finalFiles, errorDetail, attempt + 1));
+                    SkillFiles repaired;
+                    if (piAdapter != null) {
+                        repaired = piRepair(finalFiles, skillId, errorDetail, attempt + 1);
+                    } else {
+                        repaired = llmRepair(finalFiles, errorDetail, attempt + 1);
+                    }
+                    SkillFiles repairedFixed = new SkillFiles(
+                        forceSkillId(repaired.skillJson(), skillId),
+                        repaired.uiJson(),
+                        repaired.handlersJs()
+                    );
+                    finalFiles = normalizer.normalize(repairedFixed);
                 } catch (Exception repairEx) {
-                    log.error("Repair LLM call failed", repairEx);
+                    log.error("Repair call failed", repairEx);
                     eventBus.publish(new KernelEvent.PlanStep("error",
                         "修复调用失败: " + repairEx.getMessage()));
                     return null;
                 }
             }
         }
-        return null; // unreachable
+        return null;
     }
 
-    // ── Install generated skill ──────────────────────────────
+    // ── Install generated skill ──────────────────────────────────
 
     private String installSkill(SkillManifest manifest, SkillFiles files) {
         String skillId = manifest.id();
@@ -294,7 +373,6 @@ public class SkillGenerator {
             Path genomeDir = skillDir.resolve("genome");
 
             if (Files.exists(skillDir)) {
-                // Remove old version
                 try (var walk = Files.walk(skillDir)) {
                     walk.sorted(java.util.Comparator.reverseOrder())
                         .forEach(p -> { try { Files.delete(p); } catch (Exception ignored) {} });
@@ -302,25 +380,20 @@ public class SkillGenerator {
             }
             Files.createDirectories(genomeDir);
 
-            // Write skill.json
             String prettySkillJson = mapper.writerWithDefaultPrettyPrinter()
                 .writeValueAsString(manifest);
             Files.writeString(skillDir.resolve("skill.json"), prettySkillJson);
 
-            // Write genome/ui.json
             String prettyUiJson = mapper.writerWithDefaultPrettyPrinter()
                 .writeValueAsString(mapper.readTree(files.uiJson()));
             Files.writeString(genomeDir.resolve("ui.json"), prettyUiJson);
 
-            // Write genome/handlers.js
             Files.writeString(genomeDir.resolve("handlers.js"), files.handlersJs());
 
             log.info("Generated skill files written to {}", skillDir);
 
-            // Clear stale snapshot so the new files are used (not overwritten by restore)
             snapshotService.delete(skillId);
 
-            // Load and activate through SkillManager (reuses audit + activate pipeline)
             eventBus.publish(new KernelEvent.SkillLoading(skillId));
 
             try {
@@ -346,7 +419,7 @@ public class SkillGenerator {
         }
     }
 
-    // ── Helpers ──────────────────────────────────────────────
+    // ── Helpers ──────────────────────────────────────────────────
 
     private String existingSkillsSummary() {
         var skills = skillManager.listSkills();
@@ -356,10 +429,10 @@ public class SkillGenerator {
             .collect(Collectors.joining("\n"));
     }
 
-    /**
-     * Force-set the id field in skillJson to the given skillId.
-     * Prevents LLM from changing the skill id during refine/repair.
-     */
+    private Map<String, String> getModelRouting(String taskType) {
+        return storeService.getModelRouting(taskType);
+    }
+
     private String forceSkillId(String skillJson, String skillId) {
         try {
             JsonNode root = mapper.readTree(skillJson);
