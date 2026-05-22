@@ -121,12 +121,12 @@ export const kernel = {
     handlers.push(h);
   },
 
-  sendIntent(text: string) {
-    send({ type: 'user-intent', payload: { text } });
+  sendIntent(text: string, modelOverride?: { provider?: string; model?: string; apiKey?: string; apiUrl?: string }) {
+    send({ type: 'user-intent', payload: { text, ...modelOverride } });
   },
 
-  refineSkill(skillId: string, feedback: string) {
-    send({ type: 'refine-skill', skillId, payload: { feedback } });
+  refineSkill(skillId: string, feedback: string, modelOverride?: { provider?: string; model?: string; apiKey?: string; apiUrl?: string }) {
+    send({ type: 'refine-skill', skillId, payload: { feedback, ...modelOverride } });
   },
 
   handleEvent(skillId: string, eventId: string, inputs: Record<string, unknown>) {
@@ -155,5 +155,17 @@ export const kernel = {
 
   getRateLimit() {
     send({ type: 'get-rate-limit' });
+  },
+
+  listModelRouting() {
+    send({ type: 'list-model-routing' });
+  },
+
+  setModelRouting(taskType: string, provider: string, model: string, apiUrl?: string, apiKey?: string, params?: string) {
+    send({ type: 'set-model-routing', taskType, provider, model, apiUrl: apiUrl || '', apiKey: apiKey || '', params: params || '{}' });
+  },
+
+  deleteModelRouting(taskType: string) {
+    send({ type: 'delete-model-routing', taskType });
   },
 };

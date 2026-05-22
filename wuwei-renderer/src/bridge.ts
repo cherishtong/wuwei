@@ -69,6 +69,15 @@ export function initBridge() {
       case 'capability-proxy-result':
         dispatch('capability-proxy-result', msg);
         break;
+      case 'model-routing-list':
+        dispatch('model-routing-list', msg);
+        break;
+      case 'model-routing-updated':
+        dispatch('model-routing-updated', msg);
+        break;
+      case 'model-routing-deleted':
+        dispatch('model-routing-deleted', msg);
+        break;
       default:
         console.debug('[bridge] unhandled message type:', msg.type);
     }

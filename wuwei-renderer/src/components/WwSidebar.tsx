@@ -262,6 +262,7 @@ export function WwSidebar({ onViewSource }: WwSidebarProps) {
           </ScrollArea>
         </div>
       )}
+
     </div>
   );
 }

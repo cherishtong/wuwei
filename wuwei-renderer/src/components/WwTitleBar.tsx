@@ -20,6 +20,7 @@ interface TitleBarProps {
   onToggleDetail: () => void;
   sidebarCollapsed: boolean;
   onToggleSidebar: () => void;
+  onModelConfig: () => void;
 }
 
 export function WwTitleBar({
@@ -29,6 +30,7 @@ export function WwTitleBar({
   onToggleTerminal,
   sidebarCollapsed,
   onToggleSidebar,
+  onModelConfig,
 }: TitleBarProps) {
   const { resolved, toggle } = useTheme();
   const [isTauri, setIsTauri] = useState(false);
@@ -133,6 +135,19 @@ export function WwTitleBar({
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
               <path d="M2 4l3 3-3 3M7 11h4" />
               <rect x="1" y="1" width="14" height="14" rx="2" />
+            </svg>
+          </button>
+        </Tooltip>
+
+        {/* Model config */}
+        <Tooltip content="模型配置">
+          <button
+            className="p-1.5 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
+            onClick={onModelConfig}
+          >
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="2" y="2" width="12" height="12" rx="2" />
+              <path d="M6 10l2 2 4-5" />
             </svg>
           </button>
         </Tooltip>

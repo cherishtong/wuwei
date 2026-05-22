@@ -75,6 +75,24 @@ public class StoreService {
                     }
                 }
             }
+
+            // Migrations: add missing columns to model_routing (ignore if already present)
+            try (Statement stmt = c.createStatement()) {
+                stmt.execute("ALTER TABLE model_routing ADD COLUMN api_key TEXT DEFAULT ''");
+            } catch (SQLException e) { /* already exists */ }
+            try (Statement stmt = c.createStatement()) {
+                stmt.execute("ALTER TABLE model_routing ADD COLUMN api_url TEXT DEFAULT ''");
+            } catch (SQLException e) { /* already exists */ }
+            try (Statement stmt = c.createStatement()) {
+                stmt.execute("ALTER TABLE model_routing ADD COLUMN params TEXT DEFAULT '{}'");
+            } catch (SQLException e) { /* already exists */ }
+
+            // Data migration: migrate legacy openai defaults to deepseek
+            try (Statement stmt = c.createStatement()) {
+                stmt.execute("UPDATE model_routing SET provider='deepseek', model='deepseek-v4-pro' WHERE provider='openai' AND task_type IN ('skill/generate','skill/repair','ai/ask')");
+                stmt.execute("UPDATE model_routing SET provider='deepseek', model='deepseek-v4-flash' WHERE provider='openai' AND task_type='skill/drift'");
+            } catch (SQLException e) { /* ignore */ }
+
             log.info("Schema initialized");
         } catch (Exception e) {
             log.error("Schema init failed", e);
@@ -191,27 +209,35 @@ public class StoreService {
 
     public Map<String, String> getModelRouting(String taskType) {
         try (PreparedStatement ps = getConn().prepareStatement(
-                "SELECT provider, model FROM model_routing WHERE task_type = ?")) {
+                "SELECT provider, model, api_url, api_key, params FROM model_routing WHERE task_type = ?")) {
             ps.setString(1, taskType);
             try (ResultSet rs = ps.executeQuery()) {
                 if (rs.next()) {
                     return Map.of("provider", rs.getString("provider"),
-                                  "model", rs.getString("model"));
+                                  "model", rs.getString("model"),
+                                  "apiUrl", nvl(rs.getString("api_url")),
+                                  "apiKey", nvl(rs.getString("api_key")),
+                                  "params", nvl(rs.getString("params")));
                 }
             }
         } catch (SQLException e) {
             log.warn("getModelRouting failed: {}", e.getMessage());
         }
-        return Map.of("provider", "openai", "model", "gpt-4o-mini");
+        return Map.of("provider", "openai", "model", "gpt-4o-mini",
+                      "apiUrl", "", "apiKey", "", "params", "{}");
     }
 
-    public void updateModelRouting(String taskType, String provider, String model) {
+    public void updateModelRouting(String taskType, String provider, String model,
+                                    String apiUrl, String apiKey, String params) {
         try (PreparedStatement ps = getConn().prepareStatement(
-                "INSERT OR REPLACE INTO model_routing(task_type, provider, model, updated_at) " +
-                "VALUES(?, ?, ?, strftime('%s','now'))")) {
+                "INSERT OR REPLACE INTO model_routing(task_type, provider, model, api_url, api_key, params, updated_at) " +
+                "VALUES(?, ?, ?, ?, ?, ?, strftime('%s','now'))")) {
             ps.setString(1, taskType);
             ps.setString(2, provider);
             ps.setString(3, model);
+            ps.setString(4, apiUrl != null ? apiUrl : "");
+            ps.setString(5, apiKey != null ? apiKey : "");
+            ps.setString(6, params != null ? params : "{}");
             ps.executeUpdate();
         } catch (SQLException e) {
             log.warn("updateModelRouting failed: {}", e.getMessage());
@@ -222,17 +248,171 @@ public class StoreService {
         Map<String, Map<String, String>> result = new java.util.LinkedHashMap<>();
         try (Statement stmt = getConn().createStatement();
              ResultSet rs = stmt.executeQuery(
-                 "SELECT task_type, provider, model FROM model_routing")) {
+                 "SELECT task_type, provider, model, api_url, api_key, params FROM model_routing")) {
             while (rs.next()) {
                 result.put(rs.getString("task_type"), Map.of(
                     "provider", rs.getString("provider"),
-                    "model", rs.getString("model")
+                    "model", rs.getString("model"),
+                    "apiUrl", nvl(rs.getString("api_url")),
+                    "apiKey", nvl(rs.getString("api_key")),
+                    "params", nvl(rs.getString("params"))
                 ));
             }
         } catch (SQLException e) {
             log.warn("listModelRouting failed: {}", e.getMessage());
         }
         return result;
+    }
+
+    private static String nvl(String s) {
+        return s != null ? s : "";
+    }
+
+    public void deleteModelRouting(String taskType) {
+        try (PreparedStatement ps = getConn().prepareStatement(
+                "DELETE FROM model_routing WHERE task_type = ?")) {
+            ps.setString(1, taskType);
+            ps.executeUpdate();
+        } catch (SQLException e) {
+            log.warn("deleteModelRouting failed: {}", e.getMessage());
+        }
+    }
+
+    /** Seed default model routing rows if table is empty. Called once at startup. */
+    public void seedDefaultRouting(Map<String, String> llmConfig) {
+        try {
+            // Check if table already has rows
+            try (Statement stmt = getConn().createStatement();
+                 ResultSet rs = stmt.executeQuery("SELECT COUNT(*) FROM model_routing")) {
+                if (rs.next() && rs.getInt(1) > 0) return;
+            }
+
+            String provider = llmConfig.getOrDefault("provider", "deepseek");
+            String model = llmConfig.getOrDefault("model", "deepseek-chat");
+            String apiUrl = llmConfig.getOrDefault("apiUrl", "");
+            String apiKey = llmConfig.getOrDefault("apiKey", "");
+            String params = llmConfig.getOrDefault("params", "{}");
+
+            String[] taskTypes = {"skill/generate", "skill/repair", "ai/ask", "skill/drift"};
+            for (String tt : taskTypes) {
+                updateModelRouting(tt, provider, model, apiUrl, apiKey, params);
+            }
+            log.info("Seeded default model routing: {}/{}", provider, model);
+        } catch (Exception e) {
+            log.warn("seedDefaultRouting failed: {}", e.getMessage());
+        }
+    }
+
+    // ── Chat Memory (langchain4j ChatMemoryStore backend) ──────
+
+    public void saveChatMessages(String skillId, List<Map<String, Object>> messages) {
+        try (PreparedStatement ps = getConn().prepareStatement(
+                "INSERT OR REPLACE INTO skill_chat_memory(skill_id, msg_index, msg_type, msg_text) " +
+                "VALUES(?, ?, ?, ?)")) {
+            ps.setString(1, skillId);
+            for (int i = 0; i < messages.size(); i++) {
+                Map<String, Object> m = messages.get(i);
+                ps.setInt(2, i);
+                ps.setString(3, (String) m.get("type"));
+                ps.setString(4, (String) m.get("text"));
+                ps.executeUpdate();
+            }
+            // Delete stale rows beyond current size
+            try (PreparedStatement del = getConn().prepareStatement(
+                    "DELETE FROM skill_chat_memory WHERE skill_id = ? AND msg_index >= ?")) {
+                del.setString(1, skillId);
+                del.setInt(2, messages.size());
+                del.executeUpdate();
+            }
+        } catch (SQLException e) {
+            log.warn("saveChatMessages failed: {}", e.getMessage());
+        }
+    }
+
+    public List<Map<String, Object>> loadChatMessages(String skillId) {
+        List<Map<String, Object>> result = new ArrayList<>();
+        try (PreparedStatement ps = getConn().prepareStatement(
+                "SELECT msg_index, msg_type, msg_text FROM skill_chat_memory " +
+                "WHERE skill_id = ? ORDER BY msg_index")) {
+            ps.setString(1, skillId);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    result.add(Map.of(
+                        "type", rs.getString("msg_type"),
+                        "text", rs.getString("msg_text"),
+                        "index", rs.getInt("msg_index")
+                    ));
+                }
+            }
+        } catch (SQLException e) {
+            log.warn("loadChatMessages failed: {}", e.getMessage());
+        }
+        return result;
+    }
+
+    public void saveMemorySummary(String skillId, String summary, String coveredRange) {
+        try (PreparedStatement ps = getConn().prepareStatement(
+                "INSERT OR REPLACE INTO skill_memory_summary(skill_id, summary_text, covered_range, generated_at) " +
+                "VALUES(?, ?, ?, strftime('%s','now'))")) {
+            ps.setString(1, skillId);
+            ps.setString(2, summary);
+            ps.setString(3, coveredRange);
+            ps.executeUpdate();
+        } catch (SQLException e) {
+            log.warn("saveMemorySummary failed: {}", e.getMessage());
+        }
+    }
+
+    public String loadMemorySummary(String skillId) {
+        try (PreparedStatement ps = getConn().prepareStatement(
+                "SELECT summary_text FROM skill_memory_summary WHERE skill_id = ?")) {
+            ps.setString(1, skillId);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) return rs.getString("summary_text");
+            }
+        } catch (SQLException e) {
+            log.warn("loadMemorySummary failed: {}", e.getMessage());
+        }
+        return null;
+    }
+
+    public void deleteChatMemory(String skillId) {
+        try (Connection c = getConn()) {
+            try (PreparedStatement ps = c.prepareStatement(
+                    "DELETE FROM skill_chat_memory WHERE skill_id = ?")) {
+                ps.setString(1, skillId);
+                ps.executeUpdate();
+            }
+            try (PreparedStatement ps = c.prepareStatement(
+                    "DELETE FROM skill_memory_summary WHERE skill_id = ?")) {
+                ps.setString(1, skillId);
+                ps.executeUpdate();
+            }
+        } catch (SQLException e) {
+            log.warn("deleteChatMemory failed: {}", e.getMessage());
+        }
+    }
+
+    public void recordDrift(String skillId, String versionFrom, String versionTo,
+                            double driftScore, String retainedGoals, String lostGoals,
+                            String newGoals, String reason, String recommendation) {
+        try (PreparedStatement ps = getConn().prepareStatement(
+                "INSERT INTO skill_drift_log(skill_id, version_from, version_to, " +
+                "drift_score, retained_goals, lost_goals, new_goals, reason, recommendation) " +
+                "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
+            ps.setString(1, skillId);
+            ps.setString(2, versionFrom);
+            ps.setString(3, versionTo);
+            ps.setDouble(4, driftScore);
+            ps.setString(5, retainedGoals);
+            ps.setString(6, lostGoals);
+            ps.setString(7, newGoals);
+            ps.setString(8, reason);
+            ps.setString(9, recommendation);
+            ps.executeUpdate();
+        } catch (SQLException e) {
+            log.warn("recordDrift failed: {}", e.getMessage());
+        }
     }
 
     // ── Model Usage Log ────────────────────────────────────────

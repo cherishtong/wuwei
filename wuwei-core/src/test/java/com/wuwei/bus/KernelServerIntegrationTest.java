@@ -3,19 +3,19 @@ package com.wuwei.bus;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.wuwei.a2ui.A2uiEngine;
+import com.wuwei.capability.AiCapability;
 import com.wuwei.capability.CapabilityManager;
 import com.wuwei.capability.FileCapability;
 import com.wuwei.capability.NetworkCapability;
 import com.wuwei.gate.AstAuditor;
 import com.wuwei.gate.EcosystemGuardian;
-import com.wuwei.llm.LlmClient;
-import com.wuwei.llm.LlmConfig;
 import com.wuwei.llm.Normalizer;
 import com.wuwei.llm.SkillGenerator;
 import com.wuwei.sandbox.RuntimePool;
 import com.wuwei.skill.SkillManager;
 import com.wuwei.snapshot.SnapshotService;
 import com.wuwei.store.OpLogService;
+import com.wuwei.store.SkillMemoryService;
 import com.wuwei.store.SkillStateStore;
 import com.wuwei.store.StoreService;
 import org.junit.jupiter.api.AfterEach;
@@ -48,13 +48,15 @@ class KernelServerIntegrationTest {
         // Wire minimal components
         StoreService storeService = new StoreService(mapper);
         storeService.initSchema();
+        SkillMemoryService memoryService = new SkillMemoryService(mapper);
         OpLogService opLog = new OpLogService(storeService);
         EventBus eventBus = new EventBus(mapper, opLog);
         A2uiEngine a2uiEngine = new A2uiEngine(mapper);
         NetworkCapability networkCap = new NetworkCapability();
         FileCapability fileCap = new FileCapability();
         SkillStateStore stateStore = new SkillStateStore();
-        CapabilityManager capManager = new CapabilityManager(stateStore, networkCap, fileCap, eventBus);
+        AiCapability aiCap = new AiCapability(null, storeService);
+        CapabilityManager capManager = new CapabilityManager(stateStore, networkCap, fileCap, aiCap, eventBus);
         RuntimePool runtimePool = new RuntimePool();
         AstAuditor astAuditor = new AstAuditor(mapper);
         EcosystemGuardian guardian = new EcosystemGuardian(eventBus);
@@ -64,13 +66,14 @@ class KernelServerIntegrationTest {
             stateStore, eventBus, mapper, astAuditor, guardian, snapshotService
         );
         skillManager.startupLoad();
-        LlmClient llmClient = new LlmClient(LlmConfig.DISABLED, mapper);
         Normalizer normalizer = new Normalizer(mapper);
         SkillGenerator skillGenerator = new SkillGenerator(
-            llmClient, normalizer, astAuditor, guardian,
-            skillManager, eventBus, mapper, 2
+            null, memoryService, storeService,
+            normalizer, astAuditor, guardian,
+            skillManager, snapshotService, eventBus, mapper,
+            2
         );
-        MessageRouter router = new MessageRouter(mapper, eventBus, skillManager, capManager, skillGenerator);
+        MessageRouter router = new MessageRouter(mapper, eventBus, skillManager, capManager, skillGenerator, null, storeService);
 
         // Start WsServer on random port
         wsServer = new WsServer(0, router, eventBus);

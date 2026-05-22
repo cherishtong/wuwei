@@ -1,0 +1,22 @@
+[
+  {
+    "interfaces": [
+      "com.wuwei.llm.AiAskAgent"
+    ]
+  },
+  {
+    "interfaces": [
+      "com.wuwei.llm.SkillGenerateAgent"
+    ]
+  },
+  {
+    "interfaces": [
+      "com.wuwei.llm.SkillRepairAgent"
+    ]
+  },
+  {
+    "interfaces": [
+      "com.wuwei.llm.DriftAnalysisAgent"
+    ]
+  }
+]

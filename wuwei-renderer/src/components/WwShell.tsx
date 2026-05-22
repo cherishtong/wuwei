@@ -6,6 +6,7 @@ import { WwIntent } from './WwIntent';
 import { WwTerminal } from './WwTerminal';
 import { WwGateDialog } from './WwGateDialog';
 import { WwWorkbench } from './WwWorkbench';
+import { WwModelConfig } from './WwModelConfig';
 import { WelcomeScreen } from './WelcomeScreen';
 
 export function WwShell() {
@@ -16,6 +17,7 @@ export function WwShell() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [detailOpen, setDetailOpen] = useState(false);
   const [terminalOpen, setTerminalOpen] = useState(false);
+  const [modelConfigOpen, setModelConfigOpen] = useState(false);
 
   useEffect(() => {
     const onReady = (e: Event) => {
@@ -78,6 +80,7 @@ export function WwShell() {
         onToggleDetail={() => setDetailOpen((v) => !v)}
         sidebarCollapsed={sidebarCollapsed}
         onToggleSidebar={() => setSidebarCollapsed((v) => !v)}
+        onModelConfig={() => setModelConfigOpen(true)}
       />
 
       {/* Main layout */}
@@ -125,6 +128,7 @@ export function WwShell() {
       </div>
 
       <WwGateDialog />
+      <WwModelConfig open={modelConfigOpen} onClose={() => setModelConfigOpen(false)} />
     </div>
   );
 }

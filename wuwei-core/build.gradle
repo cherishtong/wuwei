@@ -41,6 +41,10 @@ dependencies {
     // Jackson (only databind, no extra modules)
     implementation 'com.fasterxml.jackson.core:jackson-databind:2.17.0'
 
+    // LangChain4j — direct LLM calls, replaces PI subprocess
+    implementation 'dev.langchain4j:langchain4j:1.15.0'
+    implementation 'dev.langchain4j:langchain4j-open-ai:1.15.0'
+
     // SLF4J simple logger
     implementation 'org.slf4j:slf4j-jdk14:2.0.13'
 
@@ -96,9 +100,13 @@ graalvmNative {
             // Include resources
             buildArgs.add('-H:IncludeResources=acorn.min.js')
             buildArgs.add('-H:IncludeResources=schema.sql')
-            buildArgs.add('-H:IncludeResources=generate.txt')
-            buildArgs.add('-H:IncludeResources=repair.txt')
-            buildArgs.add('-H:IncludeResources=refine.txt')
+            buildArgs.add('-H:IncludeResources=prompts/generate.txt')
+            buildArgs.add('-H:IncludeResources=prompts/repair.txt')
+            buildArgs.add('-H:IncludeResources=prompts/refine.txt')
+            // LangChain4j
+            buildArgs.add('--initialize-at-build-time=dev.langchain4j')
+            buildArgs.add('--initialize-at-run-time=dev.langchain4j.internal')
+            buildArgs.add('--initialize-at-run-time=okhttp3,okio')
             // Our code
             buildArgs.add('--initialize-at-build-time=com.wuwei')
             // Jackson
@@ -118,27 +126,6 @@ graalvmNative {
             buildArgs.add('--initialize-at-build-time=org.slf4j')
         }
     }
-}
-
-// Copy native image + fat jar to unified binaries folder for Tauri bundling
-def binariesDir = layout.projectDirectory.dir('../wuwei-shell/binaries')
-
-task copyNativeToBinaries(type: Copy) {
-    dependsOn nativeCompile
-    from layout.buildDirectory.dir('native/nativeCompile')
-    into binariesDir
-    include '*.exe'
-}
-
-task copyFatJarToBinaries(type: Copy) {
-    dependsOn fatJar
-    from layout.buildDirectory.dir('libs')
-    into binariesDir
-    include 'wuwei-kernel.jar'
-}
-
-task assembleBinaries {
-    dependsOn copyNativeToBinaries, copyFatJarToBinaries
 }
 
 test {

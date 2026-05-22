@@ -4,8 +4,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.wuwei.bus.event.KernelEvent;
 import com.wuwei.capability.CapabilityManager;
+import com.wuwei.llm.AgentFactory;
 import com.wuwei.llm.SkillGenerator;
-import com.wuwei.llm.PiMonoAdapter;
 import com.wuwei.skill.SkillManager;
 import com.wuwei.store.StoreService;
 import io.helidon.websocket.WsSession;
@@ -31,19 +31,19 @@ public class MessageRouter {
     private final SkillManager skillManager;
     private final CapabilityManager capManager;
     private final SkillGenerator skillGenerator;
-    private final PiMonoAdapter piAdapter;
+    private final AgentFactory agentFactory;
     private final StoreService storeService;
 
     public MessageRouter(ObjectMapper mapper, EventBus eventBus,
                          SkillManager skillManager, CapabilityManager capManager,
-                         SkillGenerator skillGenerator, PiMonoAdapter piAdapter,
+                         SkillGenerator skillGenerator, AgentFactory agentFactory,
                          StoreService storeService) {
         this.mapper = mapper;
         this.eventBus = eventBus;
         this.skillManager = skillManager;
         this.capManager = capManager;
         this.skillGenerator = skillGenerator;
-        this.piAdapter = piAdapter;
+        this.agentFactory = agentFactory;
         this.storeService = storeService;
     }
 
@@ -78,6 +78,8 @@ public class MessageRouter {
                 case "revoke-cap"         -> handleRevokeCap(session, msg);
                 case "capability-proxy" -> handleCapabilityProxy(session, msg);
                 case "set-model-routing" -> handleSetModelRouting(session, msg);
+                case "list-model-routing" -> handleListModelRouting(session);
+                case "delete-model-routing" -> handleDeleteModelRouting(session, msg);
                 default -> sendError(session, "system", "UNKNOWN_TYPE", "Unknown message type: " + type);
             }
         } catch (Exception e) {
@@ -100,9 +102,11 @@ public class MessageRouter {
             return;
         }
 
+        Map<String, String> modelOverride = extractModelOverride(msg);
+
         // Run generation in background thread (may take 30-60s)
         new Thread(() -> {
-            String resultId = skillGenerator.generate(text);
+            String resultId = skillGenerator.generate(text, modelOverride);
             log.info("Generation result: {}", resultId != null ? resultId : "FAILED");
         }, "llm-generate").start();
     }
@@ -122,9 +126,11 @@ public class MessageRouter {
             return;
         }
 
+        Map<String, String> modelOverride = extractModelOverride(msg);
+
         // Run refine in background thread (may take 30-60s)
         new Thread(() -> {
-            String resultId = skillGenerator.refine(skillId, feedback);
+            String resultId = skillGenerator.refine(skillId, feedback, modelOverride);
             log.info("Refine result: {}", resultId != null ? resultId : "FAILED");
         }, "llm-refine").start();
     }
@@ -336,6 +342,9 @@ public class MessageRouter {
         String taskType = msg.has("taskType") ? msg.get("taskType").asText() : "";
         String provider = msg.has("provider") ? msg.get("provider").asText() : "";
         String model = msg.has("model") ? msg.get("model").asText() : "";
+        String apiUrl = msg.has("apiUrl") ? msg.get("apiUrl").asText() : "";
+        String apiKey = msg.has("apiKey") ? msg.get("apiKey").asText() : "";
+        String params = msg.has("params") ? msg.get("params").asText() : "{}";
 
         if (taskType.isBlank() || provider.isBlank() || model.isBlank()) {
             eventBus.publishTo(session, new KernelEvent.KernelError("system", "INVALID_ROUTING",
@@ -344,9 +353,56 @@ public class MessageRouter {
         }
 
         log.info("set-model-routing: taskType={} -> {}/{}", taskType, provider, model);
-        storeService.updateModelRouting(taskType, provider, model);
+        storeService.updateModelRouting(taskType, provider, model, apiUrl, apiKey, params);
+        try {
+            String json = mapper.writeValueAsString(Map.of(
+                "type", "model-routing-updated",
+                "taskType", taskType,
+                "provider", provider,
+                "model", model,
+                "apiUrl", apiUrl,
+                "apiKey", apiKey,
+                "params", params
+            ));
+            session.send(json, true);
+        } catch (Exception e) {
+            log.warn("Failed to send model-routing-updated: {}", e.getMessage());
+        }
         eventBus.publishTo(session, new KernelEvent.SystemNotify(
             "模型路由已更新", taskType + " → " + provider + "/" + model));
+    }
+
+    private void handleListModelRouting(WsSession session) {
+        Map<String, Map<String, String>> entries = storeService.listModelRouting();
+        try {
+            String json = mapper.writeValueAsString(Map.of(
+                "type", "model-routing-list",
+                "entries", entries
+            ));
+            session.send(json, true);
+        } catch (Exception e) {
+            log.warn("Failed to send model-routing-list: {}", e.getMessage());
+        }
+    }
+
+    private void handleDeleteModelRouting(WsSession session, JsonNode msg) {
+        String taskType = msg.has("taskType") ? msg.get("taskType").asText() : "";
+        if (taskType.isBlank()) {
+            eventBus.publishTo(session, new KernelEvent.KernelError("system", "INVALID_ROUTING",
+                "delete-model-routing requires taskType"));
+            return;
+        }
+        log.info("delete-model-routing: taskType={}", taskType);
+        storeService.deleteModelRouting(taskType);
+        try {
+            String json = mapper.writeValueAsString(Map.of(
+                "type", "model-routing-deleted",
+                "taskType", taskType
+            ));
+            session.send(json, true);
+        } catch (Exception e) {
+            log.warn("Failed to send model-routing-deleted: {}", e.getMessage());
+        }
     }
 
     // ── helpers ──────────────────────────────────────────────────
@@ -379,5 +435,21 @@ public class MessageRouter {
 
     private void sendError(WsSession session, String skillId, String code, String message) {
         eventBus.publish(new KernelEvent.KernelError(skillId, code, message));
+    }
+
+    /** Extract optional model override from the WebSocket payload. */
+    private Map<String, String> extractModelOverride(JsonNode msg) {
+        if (!msg.has("payload")) return null;
+        JsonNode p = msg.get("payload");
+        Map<String, String> override = new java.util.LinkedHashMap<>();
+        if (p.has("model") && !p.get("model").asText().isBlank())
+            override.put("model", p.get("model").asText());
+        if (p.has("provider") && !p.get("provider").asText().isBlank())
+            override.put("provider", p.get("provider").asText());
+        if (p.has("apiKey") && !p.get("apiKey").asText().isBlank())
+            override.put("apiKey", p.get("apiKey").asText());
+        if (p.has("apiUrl") && !p.get("apiUrl").asText().isBlank())
+            override.put("apiUrl", p.get("apiUrl").asText());
+        return override.isEmpty() ? null : override;
     }
 }

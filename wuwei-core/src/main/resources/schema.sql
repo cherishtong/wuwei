@@ -91,15 +91,51 @@ CREATE TABLE IF NOT EXISTS model_routing (
     task_type  TEXT PRIMARY KEY,   -- 'skill/generate' | 'skill/repair' | 'skill/drift' | 'ai/ask'
     provider   TEXT NOT NULL,      -- 'openai' | 'anthropic' | 'deepseek' | 'google'
     model      TEXT NOT NULL,      -- 'gpt-4o' | 'claude-sonnet-4-20250514' | ...
+    api_url    TEXT DEFAULT '',    -- custom API base URL (empty = use provider default)
+    api_key    TEXT DEFAULT '',    -- per-routing API key (overrides global config)
+    params     TEXT DEFAULT '{}',  -- JSON: model parameters (temperature, max_tokens, top_p, etc.)
     updated_at INTEGER DEFAULT (strftime('%s','now'))
 );
 
 -- Default routing (inserted only if table is empty)
 INSERT OR IGNORE INTO model_routing(task_type, provider, model) VALUES
-    ('skill/generate',  'openai',    'gpt-4o'),
-    ('skill/repair',    'openai',    'gpt-4o-mini'),
-    ('skill/drift',     'openai',    'gpt-4o-mini'),
-    ('ai/ask',          'openai',    'gpt-4o-mini');
+    ('skill/generate',  'deepseek',  'deepseek-v4-pro'),
+    ('skill/repair',    'deepseek',  'deepseek-v4-pro'),
+    ('skill/drift',     'deepseek',  'deepseek-v4-flash'),
+    ('ai/ask',          'deepseek',  'deepseek-v4-pro');
+
+-- Per-skill chat memory (langchain4j ChatMemoryStore backend)
+CREATE TABLE IF NOT EXISTS skill_chat_memory (
+    skill_id    TEXT NOT NULL,
+    msg_index   INTEGER NOT NULL,
+    msg_type    TEXT NOT NULL,  -- 'SYSTEM' | 'USER' | 'AI' | 'TOOL_EXECUTION_RESULT'
+    msg_text    TEXT NOT NULL,
+    created_at  INTEGER DEFAULT (strftime('%s','now')),
+    PRIMARY KEY (skill_id, msg_index)
+);
+
+-- Auto-generated memory summaries (when chat history overflows token window)
+CREATE TABLE IF NOT EXISTS skill_memory_summary (
+    skill_id       TEXT PRIMARY KEY,
+    summary_text   TEXT NOT NULL,
+    covered_range  TEXT,  -- e.g. "msg 1-15"
+    generated_at   INTEGER DEFAULT (strftime('%s','now'))
+);
+
+-- Drift detection log (track semantic drift over skill lifetime)
+CREATE TABLE IF NOT EXISTS skill_drift_log (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    skill_id      TEXT NOT NULL,
+    version_from  TEXT,
+    version_to    TEXT,
+    drift_score   REAL NOT NULL,
+    retained_goals TEXT,
+    lost_goals    TEXT,
+    new_goals     TEXT,
+    reason        TEXT,
+    recommendation TEXT,
+    created_at    INTEGER DEFAULT (strftime('%s','now'))
+);
 
 -- LLM usage log (token + cost tracking per call)
 CREATE TABLE IF NOT EXISTS model_usage_log (

@@ -1,47 +1,38 @@
 package com.wuwei.llm;
 
-import com.fasterxml.jackson.annotation.JsonProperty;
+import java.util.Map;
 
+/**
+ * Model routing configuration for a specific task type.
+ * Built from StoreService.getModelRouting() which reads model_routing table.
+ */
 public record LlmConfig(
-    @JsonProperty("provider") String provider,
-    @JsonProperty("model") String model,
-    @JsonProperty("apiKeyEnv") String apiKeyEnv,
-    @JsonProperty("apiKey") String apiKey,
-    @JsonProperty("baseUrl") String baseUrl,
-    @JsonProperty("timeoutSeconds") int timeoutSeconds,
-    @JsonProperty("maxRetries") int maxRetries
+    String provider,
+    String model,
+    String apiKey,
+    String apiUrl,
+    String params
 ) {
-    public static final LlmConfig DISABLED = new LlmConfig(
-        "none", "", "", null, null, 60, 0
-    );
-
-    public boolean enabled() {
-        return !"none".equals(provider);
+    public static LlmConfig fromMap(Map<String, String> map) {
+        return new LlmConfig(
+            map.getOrDefault("provider", "openai"),
+            map.getOrDefault("model", "gpt-4o-mini"),
+            map.getOrDefault("apiKey", ""),
+            map.getOrDefault("apiUrl", ""),
+            map.getOrDefault("params", "{}")
+        );
     }
 
-    public String apiKey() {
-        // 1. Direct apiKey field in wuwei.json
-        if (apiKey != null && !apiKey.isBlank()) {
-            return apiKey;
-        }
-        // 2. Environment variable (e.g. OPENAI_API_KEY)
-        if (apiKeyEnv != null && !apiKeyEnv.isBlank()) {
-            String key = System.getenv(apiKeyEnv);
-            if (key != null && !key.isBlank()) return key;
-            // fallback to -D flag
-            key = System.getProperty(apiKeyEnv);
-            if (key != null && !key.isBlank()) return key;
-        }
-        return null;
-    }
-
-    public String effectiveBaseUrl() {
-        if (baseUrl != null && !baseUrl.isBlank()) return baseUrl;
-        return switch (provider) {
-            case "openai" -> "https://api.openai.com/v1";
-            case "deepseek" -> "https://api.deepseek.com/v1";
-            case "custom" -> throw new IllegalStateException("custom provider requires baseUrl");
-            default -> "https://api.openai.com/v1";
-        };
+    /** Merge user override (can be empty) over routing defaults. */
+    public static LlmConfig merge(Map<String, String> override, Map<String, String> routing) {
+        if (override == null) override = Map.of();
+        if (routing == null) routing = Map.of();
+        return new LlmConfig(
+            !override.getOrDefault("provider", "").isBlank() ? override.get("provider") : routing.getOrDefault("provider", "openai"),
+            !override.getOrDefault("model", "").isBlank() ? override.get("model") : routing.getOrDefault("model", "gpt-4o-mini"),
+            !override.getOrDefault("apiKey", "").isBlank() ? override.get("apiKey") : routing.getOrDefault("apiKey", ""),
+            !override.getOrDefault("apiUrl", "").isBlank() ? override.get("apiUrl") : routing.getOrDefault("apiUrl", ""),
+            !override.getOrDefault("params", "").isBlank() ? override.get("params") : routing.getOrDefault("params", "{}")
+        );
     }
 }

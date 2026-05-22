@@ -47,20 +47,12 @@ fn pick_folder() -> Result<String, String> {
 }
 
 fn find_kernel(app: &AppHandle) -> Option<std::path::PathBuf> {
-    // Dev mode: unified binaries folder (takes priority)
+    // Dev mode: native build path
     let dev_exe = std::path::PathBuf::from(
-        "../../wuwei-shell/binaries/wuwei-kernel.exe",
+        "../../wuwei-core/build/native/nativeCompile/wuwei-kernel.exe",
     );
     if dev_exe.exists() {
         return Some(dev_exe);
-    }
-
-    // Fallback: old native build path
-    let legacy_exe = std::path::PathBuf::from(
-        "../../wuwei-core/build/native/nativeCompile/wuwei-kernel.exe",
-    );
-    if legacy_exe.exists() {
-        return Some(legacy_exe);
     }
 
     // Production: look in Tauri resource directory
@@ -83,17 +75,12 @@ fn find_kernel(app: &AppHandle) -> Option<std::path::PathBuf> {
 fn find_config(exe_path: &std::path::Path) -> Option<std::path::PathBuf> {
     // Look for wuwei.json alongside the kernel binary and in ~/.wuwei/
     let candidates: &[fn(&std::path::Path) -> Option<std::path::PathBuf>] = &[
-        // Same directory as kernel (unified binaries folder)
+        // Same directory as kernel
         |p: &std::path::Path| {
             let c = p.parent()?.join("wuwei.json");
             c.exists().then_some(c)
         },
-        // Two levels up from binaries/ (wuwei-shell/binaries -> wuwei-shell)
-        |p: &std::path::Path| {
-            let c = p.parent()?.parent()?.join("wuwei.json");
-            c.exists().then_some(c)
-        },
-        // Four levels up (old: wuwei-core/build/native/nativeCompile -> wuwei-core)
+        // Four levels up (wuwei-core/build/native/nativeCompile -> wuwei-core)
         |p: &std::path::Path| {
             let c = p.parent()?.parent()?.parent()?.parent()?.join("wuwei.json");
             c.exists().then_some(c)
