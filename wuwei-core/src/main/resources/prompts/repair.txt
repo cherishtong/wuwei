@@ -10,6 +10,8 @@
 { "components": [ ... ] }
 === handlers.js ===
 ... JS 代码 ...
+=== design-decision ===
+修复说明（1-2 句话）：修复了什么错误、为什么这样修。
 
 **绝对禁止：**
 - 禁止用 ``` 或 ```json 等 Markdown 代码块
@@ -23,7 +25,7 @@
 - id: 必须匹配 ^[a-z][a-z0-9-]*$（小写字母开头，只含小写字母、数字、连字符）
 - version: 必须为 semver X.Y.Z 格式（如 1.0.0）
 - abi: 必须固定为 "1.0"
-- runtime: 必须是 "js"
+- runtime: 必须是 "js" 或 "browser-js"
 - capabilities: 只声明实际使用的
 - 如果用了 capability.network.fetch → capabilities 必须有 `"network": {"allowlist": ["https://..."]}`，allowlist 不能为空
 - 如果用了 capability.ai.ask → capabilities 必须有 `"ai": {}`
@@ -36,7 +38,7 @@
 - 所有 children 和 child 引用的 id 必须在 components 中存在
 - Button 的 action.event.name 必须等于按钮的 id
 - Button 的 variant 只能是：default / primary / borderless
-- component 名只能是：Text / Button / TextField / Column / Row / Image / Icon / Divider / List / Card / Tabs / Modal / CheckBox / Slider / ChoicePicker
+- component 名只能是：Text / Button / TextField / Column / Row / Image / Icon / Divider / List / Card / Tabs / Modal / CheckBox / Slider / ChoicePicker / DateTimeInput / Switch / RadioGroup / Select / Toggle / ToggleGroup / InputOTP / Table / Badge / Progress / Avatar / Alert / Skeleton / AspectRatio / ScrollArea / Accordion / Collapsible / Carousel / Pagination / Breadcrumb / Video / AudioPlayer / Sheet / Drawer / AlertDialog / Tooltip / HoverCard / Popover / DropdownMenu / ContextMenu / Command / Canvas / Sonner
 - Text 的 variant 只能是：h1 / h2 / h3 / h4 / h5 / body / caption
 - Button 的 variant 只能是：default / primary / borderless
 - TextField 的 variant 只能是：shortText / longText / number / obscured
@@ -165,4 +167,42 @@
 ### MISSING_AI_CAPABILITY
 - 用了 capability.ai.ask 但 capabilities 中没有声明 ai → 添加 "ai": {}
 
-只输出修复后的三个文件，不要任何额外内容。
+### MISSING_CANVAS_CAPABILITY
+- 用了 capability.canvas.render 但 capabilities 中没有声明 canvas → 添加 "canvas": {}
+- ui.json 中有 Canvas 组件但没声明 canvas capability → 添加声明
+
+### MISSING_THREEJS_CAPABILITY
+- 用了 capability.threejs 但 capabilities 中没有声明 threejs → 添加 "threejs": {}
+- 用了 threejs 但 runtime 不是 "browser-js" → 改为 "runtime": "browser-js"
+
+### RUNTIME_MISMATCH
+- 使用了 async/await 但 runtime 是 "js" → 改为 "runtime": "browser-js"（GraalJS 不支持 async）
+- 使用了 capability.threejs 但 runtime 是 "js" → 必须用 "browser-js"
+- 使用了 capability.canvas 但 runtime 是 "js" → 必须用 "browser-js"
+- js 运行时顶层用了 let/var → 改为 const（js 运行时只允许 const 顶层声明）
+
+### BROWSER_JS_VAR
+- browser-js 运行时顶层用了 const/let 声明状态 → 改为 var（browser-js 中只用 var 声明持久状态）
+- 这不是错误，但如果函数内用 var 声明也是正确的
+
+### ASYNC_CAPABILITY_MISSING_AWAIT
+- browser-js 中调用了 capability.storage.get() 但没有 await → 添加 await
+- browser-js 中调用了 capability.ai.ask() 但没有 await → 添加 await
+- browser-js 中调用了 capability.threejs.init() 但没有 await → 添加 await
+
+### THREEJS_NEW_KEYWORD
+- 使用了 `new THREE.BoxGeometry(...)` → 改为 `T.BoxGeometry(...)`（不需要 new）
+- 属性设置用了 `.position.set(x,y,z)` → 改为 `.position.x = x; .position.y = y; .position.z = z`
+
+### CARD_INVALID_CHILD
+- Card 的 child 引用了不存在的组件 → 确保 child 指向已定义的组件
+- Card 使用了 children（数组）→ 改为 child（单个组件 id）
+
+### BAD_SEVERITY
+- Alert 的 severity 不在允许值中 → 改为 info / warning / error / success
+
+### BAD_TABLE_COLUMNS
+- Table 缺少 columns 或 rows 属性 → 必须同时提供
+- columns 中缺少 title 或 key → 补充完整
+
+只输出修复后的三个文件和一个 design-decision，不要任何额外内容。

@@ -10,6 +10,8 @@
 { "components": [ ... ] }
 === handlers.js ===
 ... JS 代码 ...
+=== design-decision ===
+简短说明你的设计决策和理由（1-3 句话）。例如为什么选择这个布局、为什么用这个 capability、有什么取舍等。
 
 **禁止事项（违反会导致解析失败）：**
 - 禁止在分隔符前后添加额外文字
@@ -61,6 +63,121 @@
 - handlers.js 中用了 capability.network.fetch → 必须声明 network 并带 allowlist
 - network allowlist 格式：`"network": {"allowlist": ["https://api.example.com"]}`
 - ai 声明格式：`"ai": {}`
+
+### runtime 选择：`"js"` vs `"browser-js"`
+
+系统支持两种运行时环境，根据 Skill 需求选择：
+
+**`"runtime": "js"`**（默认，GraalJS 沙箱）：
+- 同步执行模型，禁止 async/await/Promise
+- 顶层只允许 const，禁止 let/var
+- 适用于：计数器、表单、计算器、数据展示等简单交互
+- capability 均为同步 API
+
+**`"runtime": "browser-js"`**（浏览器执行环境）：
+- 支持 async/await/Promise，handlers 可以是 async function
+- 顶层允许 var 声明状态变量
+- 适用于：需要 3D 渲染（threejs）、Canvas 2D 绘图、复杂异步数据获取
+- 所有 capability（除 ui.set/get）返回 Promise
+- capability.storage.get/put/delete → Promise
+- capability.network.fetch → Promise
+- capability.ai.ask → Promise
+- capability.file.read/write/list/delete → Promise
+- capability.os.notify → Promise
+- capability.threejs.init(canvasId) → Promise<scene3d>
+- capability.canvas.render(canvasId, commands) → 同步
+
+**选择 browser-js 时必须声明的能力：**
+```json
+"capabilities": {
+  "ui": {},
+  "storage": {},
+  "canvas": {},      // 如果使用 Canvas 组件绘图
+  "threejs": {}      // 如果使用 Three.js 3D
+}
+```
+
+**browser-js 声明格式：**
+```json
+{
+  "runtime": "browser-js",
+  "capabilities": {
+    "ui": {},
+    "storage": {},
+    "canvas": {},
+    "threejs": {}
+  }
+}
+```
+
+### Canvas 2D 绘图（仅 browser-js）
+
+声明 `"canvas": {}` 后，在 ui.json 中添加 Canvas 组件，handler 中通过 `capability.canvas.render(canvasId, commands)` 绘制。
+
+Canvas 组件：
+```json
+{ "id": "draw-area", "component": "Canvas" }
+// 可选属性：
+// width: 数字（像素，省略则自动填充父容器）
+// height: 数字（像素，省略则自动填充父容器）
+// weight: 数字（在 Row/Column 中的 flex-grow）
+```
+
+绘制命令格式（DrawCommand 数组）：
+- **rect**: `{type: "rect", x, y, w, h, fill?, stroke?, lineWidth?}` — 矩形
+- **roundRect**: `{type: "roundRect", x, y, w, h, r?, fill?, stroke?, lineWidth?}` — 圆角矩形
+- **text**: `{type: "text", x, y, text, font?, fill?, align?, baseline?}` — 文字
+- **line**: `{type: "line", x, y, x2, y2, stroke?, lineWidth?}` — 线段
+- **arrow**: `{type: "arrow", x, y, x2, y2, stroke?, lineWidth?}` — 箭头
+
+### Three.js 3D 渲染（仅 browser-js）
+
+声明 `"threejs": {}` 后，在 ui.json 中添加 Canvas 组件作为渲染目标，handler 中通过 `capability.threejs.init(canvasId)` 初始化场景。
+
+```js
+async function onInit(__inputs__, capability) {
+  var scene3d = await capability.threejs.init('three-canvas');
+  // scene3d 包含：
+  // scene3d.THREE — Three.js 工厂函数（无需 new 关键字）
+  // scene3d.scene — Three.js Scene 对象
+  // scene3d.camera — PerspectiveCamera（预配置）
+  // scene3d.renderer — WebGLRenderer（预配置阴影+色调映射）
+  // scene3d.controls — OrbitControls（带阻尼）
+  // scene3d.render() — 手动渲染一帧
+  // scene3d.animate(callback) — 启动动画循环，每帧调用 callback
+  // scene3d.dispose() — 清理资源
+
+  var T = scene3d.THREE;
+  var geometry = T.BoxGeometry(1, 1, 1);
+  var material = T.MeshStandardMaterial({color: 0x44aa88});
+  var cube = T.Mesh(geometry, material);
+  scene3d.scene.add(cube);
+
+  scene3d.animate(function() {
+    cube.rotation.x += 0.01;
+    cube.rotation.y += 0.01;
+  });
+}
+```
+
+**THREE 工厂函数（无需 `new`）：**
+- 几何体：BoxGeometry(w,h,d), SphereGeometry(r,ws,hs), CylinderGeometry(rT,rB,h,rs), TorusGeometry(r,tube,rs,ts), TorusKnotGeometry(r,tube,ts,rs,p,q), PlaneGeometry(w,h), RingGeometry(in,out,ts), ConeGeometry(r,h,rs), DodecahedronGeometry(r,d), IcosahedronGeometry(r,d), OctahedronGeometry(r,d), TetrahedronGeometry(r,d), BufferGeometry()
+- 材质：MeshStandardMaterial, MeshPhongMaterial, MeshBasicMaterial, MeshLambertMaterial, MeshNormalMaterial, MeshToonMaterial, PointsMaterial, LineBasicMaterial, LineDashedMaterial, SpriteMaterial, ShaderMaterial（参数均为对象 `{color, roughness, metalness, ...}`）
+- 对象：Mesh(geo,mat), Points(geo,mat), Line(geo,mat), Group()
+- 光源：AmbientLight(color,intensity), DirectionalLight(color,intensity), PointLight(color,intensity,distance?,decay?), SpotLight(color,intensity,distance?,angle?,penumbra?,decay?)
+- 辅助：AxesHelper(size), GridHelper(size,divisions,c1?,c2?)
+- 常量/工具：Color, Vector3, Shape, ExtrudeGeometry, MathUtils, BufferAttribute, DoubleSide, mergeGeometries(geoms)
+
+**重要：Three.js 中对象属性直接赋值（.position.x = ...），不要使用 set 方法。**
+
+```js
+// ✅ 正确
+cube.position.x = 2;
+cube.rotation.y += 0.01;
+
+// ❌ 错误
+cube.position.set(2, 0, 0);
+```
 
 ## ui.json 规范 — 纯 A2UI v0.9 协议
 
@@ -211,6 +328,33 @@ label Text / Icon 组件不要放在任何 container 的 children 中（由 Butt
 **ChoicePicker** — 选项选择器：
 { "id": "mode-picker", "component": "ChoicePicker", "label": "选择模式", "variant": "mutuallyExclusive", "displayStyle": "chips", "options": [{ "label": "模式A", "value": "a" }, { "label": "模式B", "value": "b" }], "value": { "path": "/mode" } }
 
+**DateTimeInput** — 日期/时间选择器：
+{ "id": "birthday", "component": "DateTimeInput", "label": "生日", "value": { "path": "/birthday" }, "enableDate": true, "enableTime": false }
+属性：
+- label: 纯字符串（可选）
+- value: 纯字符串或 { "path": "/..." }
+- enableDate: 布尔（默认 true）
+- enableTime: 布尔（默认 true）— 只设一个为 true 时切换为纯日期/纯时间模式
+- min / max: 字符串（可选，ISO 格式限制范围）
+
+**Switch** — 开关切换：
+{ "id": "dark-mode", "component": "Switch", "label": "暗黑模式", "value": { "path": "/darkMode" } }
+
+**RadioGroup** — 单选按钮组：
+{ "id": "gender", "component": "RadioGroup", "label": "性别", "options": [{ "label": "男", "value": "male" }, { "label": "女", "value": "female" }], "value": { "path": "/gender" } }
+
+**Select** — 下拉选择：
+{ "id": "city-select", "component": "Select", "label": "城市", "options": [{ "label": "北京", "value": "beijing" }, { "label": "上海", "value": "shanghai" }], "value": { "path": "/city" } }
+
+**Toggle** — 单个切换按钮：
+{ "id": "bold-toggle", "component": "Toggle", "label": "加粗", "value": { "path": "/bold" } }
+
+**ToggleGroup** — 切换按钮组：
+{ "id": "align-toggle", "component": "ToggleGroup", "label": "对齐", "options": [{ "label": "左", "value": "left" }, { "label": "中", "value": "center" }], "value": { "path": "/align" } }
+
+**InputOTP** — 一次性验证码输入：
+{ "id": "otp-input", "component": "InputOTP", "length": 6, "value": { "path": "/otp" } }
+
 ---
 
 ### 复合组件
@@ -238,6 +382,103 @@ label Text / Icon 组件不要放在任何 container 的 children 中（由 Butt
 **Modal** — 弹窗：
 { "id": "confirm-modal", "component": "Modal", "trigger": "open-modal-btn", "content": "modal-inner" }
 （trigger 和 content 都是已有组件 id，content 是弹窗内显示的内容组件）
+
+**Sheet** — 侧边滑出面板：
+{ "id": "detail-sheet", "component": "Sheet", "trigger": "open-sheet-btn", "content": "sheet-inner", "side": "right" }
+属性：trigger, content（组件 id），side（可选："left"/"right"/"top"/"bottom"，默认 "right"）
+
+**Drawer** — 抽屉面板（与 Sheet 类似）：
+{ "id": "menu-drawer", "component": "Drawer", "trigger": "menu-btn", "content": "drawer-inner", "side": "left" }
+
+**AlertDialog** — 确认对话框：
+{ "id": "confirm-dialog", "component": "AlertDialog", "trigger": "delete-btn", "title": "确认删除", "description": "此操作不可撤销", "confirmLabel": "删除", "cancelLabel": "取消" }
+属性：trigger, title, description, confirmLabel（可选），cancelLabel（可选）。点击确认按钮时触发 trigger 按钮的 action 事件。
+
+**Alert** — 提示横幅：
+{ "id": "info-alert", "component": "Alert", "severity": "info", "title": "提示", "text": "操作成功" }
+属性：severity（"info"/"warning"/"error"/"success"），title（可选），text
+
+**Tooltip** — 鼠标悬停提示：
+{ "id": "help-tip", "component": "Tooltip", "child": "info-icon", "text": "帮助信息" }
+属性：child（触发元素 id），text（提示文字）
+
+**HoverCard** — 悬停卡片（悬停显示详细内容）：
+{ "id": "preview-card", "component": "HoverCard", "trigger": "trigger-text", "content": "card-inner" }
+
+**Popover** — 点击弹出面板：
+{ "id": "filter-popover", "component": "Popover", "trigger": "filter-btn", "content": "popover-inner" }
+
+**DropdownMenu** — 下拉菜单：
+{ "id": "action-menu", "component": "DropdownMenu", "trigger": "menu-btn", "items": [{ "label": "编辑", "id": "edit-item" }, { "label": "删除", "id": "delete-item" }] }
+点击菜单项时触发对应 id 的 action 事件。
+
+**ContextMenu** — 右键菜单（用法同 DropdownMenu）。
+
+**Command** — 命令面板/搜索：
+{ "id": "search-cmd", "component": "Command", "placeholder": "搜索..." }
+
+---
+
+### 数据展示组件
+
+**Table** — 数据表格：
+{ "id": "data-table", "component": "Table", "columns": [{ "title": "姓名", "key": "name" }, { "title": "年龄", "key": "age" }], "rows": [["张三", "28"], ["李四", "32"]] }
+属性：columns（[{title, key}] 列定义数组），rows（二维数组，每行对应 columns 顺序），caption（可选，表格底部说明）。单元格内容支持 Markdown。
+
+**Avatar** — 头像：
+{ "id": "user-avatar", "component": "Avatar", "src": "https://...", "alt": "用户名" }
+属性：src（图片 URL），alt（替代文本）
+
+**Badge** — 徽标/标签：
+{ "id": "status-badge", "component": "Badge", "label": "已完成", "variant": "default" }
+属性：label（显示文字），variant（可选："default"/"secondary"/"destructive"/"outline"）
+
+**Progress** — 进度条：
+{ "id": "download-progress", "component": "Progress", "value": 65, "label": "下载进度" }
+属性：value（0-100 数字），label（可选，无障碍标签）
+
+**Skeleton** — 加载占位：
+{ "id": "content-skeleton", "component": "Skeleton" }
+
+**AspectRatio** — 固定宽高比容器：
+{ "id": "video-wrapper", "component": "AspectRatio", "ratio": "16/9", "child": "video-player" }
+属性：ratio（"16/9"/"4/3"/"1/1"），child（子组件 id）
+
+**ScrollArea** — 可滚动区域：
+{ "id": "scroll-area", "component": "ScrollArea", "child": "long-content-column" }
+
+---
+
+### 导航与布局组件
+
+**Accordion** — 手风琴折叠面板：
+{ "id": "faq-accordion", "component": "Accordion", "items": [{ "title": "问题1", "content": "answer-1" }, { "title": "问题2", "content": "answer-2" }] }
+属性：items 数组，每项 {title, content: 子组件 id}
+
+**Collapsible** — 可折叠区域：
+{ "id": "collapsible-section", "component": "Collapsible", "trigger": "toggle-text", "content": "section-content" }
+
+**Carousel** — 轮播：
+{ "id": "image-carousel", "component": "Carousel", "children": ["slide-1", "slide-2", "slide-3"] }
+属性：children（轮播子项 id 数组）
+
+**Pagination** — 分页：
+{ "id": "page-nav", "component": "Pagination", "totalPages": 10, "currentPage": { "path": "/page" } }
+
+**Breadcrumb** — 面包屑导航：
+{ "id": "breadcrumb-nav", "component": "Breadcrumb", "items": [{ "label": "首页", "id": "home-crumb" }, { "label": "分类", "id": "category-crumb" }] }
+点击面包屑项时触发对应 id 的 action 事件。
+
+---
+
+### 媒体组件
+
+**Video** — 视频播放器：
+{ "id": "intro-video", "component": "Video", "url": "https://example.com/video.mp4" }
+
+**AudioPlayer** — 音频播放器：
+{ "id": "bgm-player", "component": "AudioPlayer", "url": "https://example.com/audio.mp3", "description": "背景音乐" }
+属性：url（音频 URL），description（可选）
 
 ---
 
@@ -290,6 +531,7 @@ Handler __inputs__: { "num1": "5" }
 // __init__ 事件 → onInit（可选）
 // __destroy__ 事件 → onDestroy（可选）
 
+// 以下规则适用于 runtime: "js"（GraalJS 沙箱）：
 // 所有函数为同步函数（禁止 async/await/Promise）
 // 顶层只允许 const，禁止 let/var
 // capability.ui.set/get 的第一个参数必须是字符串字面量，且该 id 必须在 ui.json 中存在
@@ -361,6 +603,93 @@ if (result.status === 200) {
 - Handler 通过 __inputs__.fieldId 读取
 - 不要用 capability.ui.get 读取 TextField 值（那只能读 ui.set 设置的）
 
+### browser-js 运行时 handlers.js 规则
+
+当 skill.json 中 `"runtime": "browser-js"` 时，handlers 在真实浏览器环境中执行，规则与 js 运行时不同：
+
+**函数声明：**
+```js
+// 支持 async function
+async function onInit(__inputs__, capability) { ... }
+async function onQueryBtn(__inputs__, capability) { ... }
+
+// 也支持同步函数
+function onResetBtn(__inputs__, capability) { ... }
+```
+
+**状态变量：**
+```js
+// 顶层用 var 声明持久状态（browser-js 中允许）
+var counter = 0;
+var items = [];
+```
+
+**异步 API（需 await 或 .then()）：**
+```js
+// storage 返回 Promise
+var saved = await capability.storage.get("count");
+await capability.storage.put("count", "5");
+
+// network 返回 Promise
+var resp = await capability.network.fetch({ url: "https://api.example.com/data" });
+if (resp.status === 200) { ... }
+
+// ai.ask 返回 Promise
+var result = await capability.ai.ask("查询信息");
+if (result.status === 200) { ... }
+
+// threejs.init 返回 Promise
+var scene3d = await capability.threejs.init('my-canvas');
+
+// os.notify 返回 Promise
+await capability.os.notify("标题", "内容");
+```
+
+**同步 API（无需 await）：**
+```js
+// ui.set/get 始终同步（两种运行时都是）
+capability.ui.set("title", "text", "新标题");
+var current = capability.ui.get("title", "text");
+
+// canvas.render 同步
+capability.canvas.render("my-canvas", [
+  { type: "rect", x: 10, y: 10, w: 100, h: 50, fill: "#4488ff" }
+]);
+```
+
+**完整 browser-js 示例（Three.js 3D 场景）：**
+
+```js
+var scene3d = null;
+
+async function onInit(__inputs__, capability) {
+  scene3d = await capability.threejs.init('three-canvas');
+  var T = scene3d.THREE;
+
+  // 光照
+  scene3d.scene.add(T.AmbientLight(0xffffff, 0.6));
+  var dirLight = T.DirectionalLight(0xffffff, 0.8);
+  dirLight.position.set(5, 10, 5);
+  scene3d.scene.add(dirLight);
+
+  // 几何体
+  var geo = T.TorusKnotGeometry(1, 0.3, 128, 32, 2, 3);
+  var mat = T.MeshStandardMaterial({ color: 0x44aa88, roughness: 0.3, metalness: 0.6 });
+  var knot = T.Mesh(geo, mat);
+  scene3d.scene.add(knot);
+
+  // 动画循环
+  scene3d.animate(function() {
+    knot.rotation.x += 0.005;
+    knot.rotation.y += 0.01;
+  });
+}
+
+function onDestroy(__inputs__, capability) {
+  if (scene3d) { scene3d.dispose(); scene3d = null; }
+}
+```
+
 ## 完整示例：计数器
 
 === skill.json ===
@@ -397,9 +726,6 @@ if (result.status === 200) {
 
 === handlers.js ===
 function onInit(__inputs__, capability) {
-  capability.storage.get("count").then(function(v) {
-    // storage 是同步的
-  });
   var saved = capability.storage.get("count");
   if (saved) {
     capability.ui.set("count-display", "text", saved);
@@ -420,19 +746,28 @@ function onDecrementBtn(__inputs__, capability) {
   capability.storage.put("count", String(next));
 }
 
+=== design-decision ===
+使用纯 UI capability + storage 持久化计数，保持最小依赖。Column 居中布局 + Row 按钮组是最简洁的计数器 UI 模式。
+
 ## 输出前自查清单（每一条都会在校验时检查）
 
 1. skill.json 是否只有 7 个顶级字段？（id, version, abi, runtime, meta, capabilities, signature）
 2. id 是否符合 ^[a-z][a-z0-9-]*$？（小写字母开头，只含小写字母+数字+连字符）
 3. version 是否为 X.Y.Z 格式？（如 1.0.0）
 4. abi 是否为 "1.0"？
-5. ui.json 中是否有 id="root" 且 component="Column" 的组件？
-6. 所有 children 和 child 引用的 id 是否都存在？
-7. 所有 Button 的 action.event.name 是否与按钮 id 相同？
-8. Handler 函数名是否正确转换了？（add-btn → onAddBtn）
-9. handlers.js 中没有 let/var 顶层声明？（允许 var 在函数内部使用）
-10. handlers.js 中没有 async/await/Promise？
-11. 是否没有用 Markdown 代码块包裹输出？
-12. 分隔符是否严格为 === filename === 格式且独占一行？
+5. runtime 是否根据需求正确选择了 "js" 或 "browser-js"？
+6. 声明了 canvas/threejs 时 runtime 是否设为 "browser-js"？
+7. browser-js 中使用 async/await 时 handlers 是否声明为 async function？
+8. ui.json 中是否有 id="root" 且 component="Column" 的组件？
+9. 所有 children 和 child 引用的 id 是否都存在？
+10. 所有 Button 的 action.event.name 是否与按钮 id 相同？
+11. Handler 函数名是否正确转换了？（add-btn → onAddBtn）
+12. js 运行时：handlers.js 中没有 let/var 顶层声明？（允许 var 在函数内部使用）
+13. browser-js 运行时：顶层是否用 var（而非 const/let）声明状态变量？
+14. js 运行时：handlers.js 中没有 async/await/Promise？
+15. browser-js 运行时：storage/network/ai/threejs 调用是否使用了 await 或 .then()？
+16. 是否没有用 Markdown 代码块包裹输出？
+17. 分隔符是否严格为 === filename === 格式且独占一行？
+18. 是否输出了 === design-decision === 部分？
 
-只输出三个文件，不要任何额外内容。
+只输出三个文件和一个 design-decision，不要任何额外内容。

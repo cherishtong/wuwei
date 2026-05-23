@@ -18,15 +18,20 @@ import dev.langchain4j.service.TokenStream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 /**
  * Skill generation pipeline via LangChain4j AiServices + ChatMemory.
@@ -53,6 +58,7 @@ public class SkillGenerator {
     private final ObjectMapper mapper;
     private final String skillsBaseDir;
     private final int maxRepairAttempts;
+    private final ExecutorService memoryExecutor = Executors.newVirtualThreadPerTaskExecutor();
 
     public SkillGenerator(AgentFactory agentFactory,
                           SkillMemoryService memoryService, StoreService storeService,
@@ -178,22 +184,11 @@ public class SkillGenerator {
 
             SkillFiles files = OutputParser.parseThreeFiles(raw);
 
-            // Persist memory (first-time generation only)
-            if (memoryCtx == null) {
-                try {
-                    String realId = extractSkillId(files.skillJson());
-                    memoryService.writeIntent(realId, intent);
-                    String designDecision = OutputParser.extractDesignDecision(raw);
-                    if (designDecision != null && !designDecision.isBlank()) {
-                        memoryService.appendDesign(realId, "Initial Design", designDecision);
-                    }
-                } catch (Exception e) {
-                    log.warn("Failed to persist memory: {}", e.getMessage());
-                }
-            }
+            String designDecision = OutputParser.extractDesignDecision(raw);
 
             eventBus.publish(new KernelEvent.PlanStep("generating", "生成完成"));
-            return auditAndInstall(normalizer.normalize(files), skillId, modelOverride);
+            return auditAndInstall(normalizer.normalize(files), skillId, modelOverride,
+                intent, "Initial Design", designDecision);
 
         } catch (Exception e) {
             log.error("LLM generation failed", e);
@@ -254,15 +249,11 @@ public class SkillGenerator {
             );
             SkillFiles normalized = normalizer.normalize(rawFixed);
 
-            // Append design decision if present
             String designDecision = OutputParser.extractDesignDecision(raw);
-            if (designDecision != null && !designDecision.isBlank()) {
-                memoryService.appendDesign(skillId,
-                    "Refine: " + feedback.substring(0, Math.min(60, feedback.length())),
-                    designDecision);
-            }
+            String designTitle = "Refine: " + feedback.substring(0, Math.min(60, feedback.length()));
 
-            return auditAndInstall(normalized, skillId, modelOverride);
+            return auditAndInstall(normalized, skillId, modelOverride,
+                null, designTitle, designDecision);
 
         } catch (Exception e) {
             log.error("LLM refine failed for {}", skillId, e);
@@ -308,7 +299,8 @@ public class SkillGenerator {
     // ── Audit + Repair loop + Install ───────────────────────────
 
     private String auditAndInstall(SkillFiles initialFiles, String skillId,
-                                    Map<String, String> modelOverride) {
+                                    Map<String, String> modelOverride,
+                                    String intent, String designTitle, String designDecision) {
         eventBus.publish(new KernelEvent.PlanStep("normalizing", "正在规范化输出..."));
         SkillFiles finalFiles = initialFiles;
 
@@ -337,7 +329,11 @@ public class SkillGenerator {
                         "audit-passed", modelOverride);
                 }
 
-                return installSkill(manifest, finalFiles);
+                String installedId = installSkill(manifest, finalFiles);
+                if (installedId != null) {
+                    memoryExecutor.submit(() -> persistMemory(installedId, intent, designTitle, designDecision));
+                }
+                return installedId;
 
             } catch (GateException e) {
                 String errorDetail = "[" + e.getCode() + "] " + e.getMessage();
@@ -404,6 +400,24 @@ public class SkillGenerator {
         }
     }
 
+    // ── Memory persistence ───────────────────────────────────────
+
+    private void persistMemory(String skillId, String intent, String designTitle, String designDecision) {
+        if (intent != null) {
+            try {
+                memoryService.writeIntent(skillId, intent);
+            } catch (IOException e) {
+                log.debug("Intent already locked for {}: {}", skillId, e.getMessage());
+            }
+        }
+        // Always record design entry: use LLM-provided reasoning if present, else fall back to title
+        String entry = designDecision != null && !designDecision.isBlank()
+            ? designDecision
+            : (designTitle != null ? designTitle : "Design Decision");
+        String title = designTitle != null ? designTitle : "Design Decision";
+        memoryService.appendDesign(skillId, title, entry);
+    }
+
     // ── Install generated skill ─────────────────────────────────
 
     private String installSkill(SkillManifest manifest, SkillFiles files) {
@@ -416,10 +430,19 @@ public class SkillGenerator {
             Path skillDir = Paths.get(skillsBaseDir, skillId);
             Path genomeDir = skillDir.resolve("genome");
 
+            // Clean stale artifacts but preserve memory/ (immutable intent + design log)
             if (Files.exists(skillDir)) {
-                try (var walk = Files.walk(skillDir)) {
-                    walk.sorted(java.util.Comparator.reverseOrder())
-                        .forEach(p -> { try { Files.delete(p); } catch (Exception ignored) {} });
+                // Delete individual files/dirs, not memory/
+                for (String name : List.of("skill.json", "genome", "phenotype")) {
+                    Path p = skillDir.resolve(name);
+                    if (Files.isDirectory(p)) {
+                        try (Stream<Path> walk = Files.walk(p)) {
+                            walk.sorted(Comparator.reverseOrder())
+                                .forEach(x -> { try { Files.delete(x); } catch (Exception ignored) {} });
+                        }
+                    } else {
+                        try { Files.delete(p); } catch (Exception ignored) {}
+                    }
                 }
             }
             Files.createDirectories(genomeDir);

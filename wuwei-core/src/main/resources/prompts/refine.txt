@@ -13,6 +13,8 @@
 { "components": [ ... ] }
 === handlers.js ===
 ... 优化后的处理函数 ...
+=== design-decision ===
+优化说明（1-2 句话）：根据反馈做了什么优化。
 
 **绝对禁止：**
 - **禁止修改 skill.json 中的 id 字段（必须保持为 "{ORIGINAL_SKILL_ID}"）**
@@ -55,15 +57,30 @@
 
 ## handlers.js 规则
 
+**以下规则仅适用于 runtime="js" 的 Skill：**
 - 函数名从 button id 转换：add-btn → onAddBtn, new-input-btn → onNewInputBtn
-- 顶层（函数外）变量声明用 `var`，不要用 `const` 或 `let`（会被 STATE_LEAK 拒绝）
+- 顶层（函数外）变量声明用 `const`（js 运行时禁止 let/var 顶层）
 - 函数内任意 const/let/var 都可以
 - 所有函数为同步函数（禁止 async/await/Promise）
+- 禁止：eval, Function(), require, import, globalThis, fetch, XMLHttpRequest, Promise, WebSocket
+- capability 的所有方法均为同步调用
+
+**以下规则仅适用于 runtime="browser-js" 的 Skill：**
+- 函数名规则同上
+- 顶层（函数外）变量声明用 `var`（browser-js 用 var 持久化状态）
+- 函数可以是 async function（支持 async/await）
+- capability.storage.get/put/delete 返回 Promise（需 await 或 .then()）
+- capability.network.fetch 返回 Promise
+- capability.ai.ask 返回 Promise
+- capability.threejs.init(canvasId) 返回 Promise<scene3d>
+- capability.canvas.render(canvasId, commands) 为同步调用
+- capability.ui.set/get 始终同步
+
+**两种运行时通用规则：**
 - capability.ui.set/get 的第一个参数必须是字符串字面量（不是变量）
 - capability.ui.set(id, property, value) 的 value 用纯字符串或数字
 - 读取 TextField 用户输入：通过 __inputs__ 参数（需在 Button action.context 中配置 path 绑定）
 - 不要用 capability.ui.get 读取 TextField 用户输入
-- 禁止：eval, Function(), require, import, globalThis, fetch, XMLHttpRequest, Promise, WebSocket
 - capability.ai.ask(prompt) → {status, body}，status===200 表示成功
 - capability.network.fetch({url, ...}) → {status, body}，需在 capabilities 中声明 network 并带 allowlist
 - 如果不知道真实 API 地址 → 不要用 network.fetch 编造 URL，改用 capability.ai.ask
@@ -94,4 +111,4 @@ Handler __inputs__: { "num1": "5" }
 - capability.network.fetch({url, method?, headers?, body?}) → {status, body}（需声明 network 且带 allowlist）
 - capability.ai.ask(prompt) → {status, body}（需声明 ai，用于 LLM 检索/搜索，不知道 API 地址时使用）
 
-只输出三个文件，不要任何额外内容。
+只输出三个文件和一个 design-decision，不要任何额外内容。

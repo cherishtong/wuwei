@@ -36,7 +36,11 @@ public class OutputParser {
                 uiJson = extract(raw, "=== genome/ui.json ===", "=== genome/handlers.js ===");
             }
         }
-        String handlersJs = raw.substring(handlersStart + "=== handlers.js ===".length()).trim();
+        // handlers.js may be followed by === design-decision ===; stop there if present
+        int designStart = raw.indexOf("=== design-decision ===", handlersStart);
+        String handlersJs = (designStart != -1
+            ? raw.substring(handlersStart + "=== handlers.js ===".length(), designStart)
+            : raw.substring(handlersStart + "=== handlers.js ===".length())).trim();
         handlersJs = stripMarkdownFences(handlersJs);
 
         // Validate

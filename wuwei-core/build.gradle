@@ -107,13 +107,8 @@ graalvmNative {
             buildArgs.add('--initialize-at-build-time=dev.langchain4j')
             buildArgs.add('--initialize-at-run-time=dev.langchain4j.internal')
             buildArgs.add('--initialize-at-run-time=okhttp3,okio')
-            // Our code
-            buildArgs.add('--initialize-at-build-time=com.wuwei')
             // Jackson
             buildArgs.add('--initialize-at-build-time=com.fasterxml.jackson')
-            buildArgs.add('--initialize-at-build-time=com.fasterxml.jackson.core')
-            buildArgs.add('--initialize-at-build-time=com.fasterxml.jackson.databind')
-            buildArgs.add('--initialize-at-build-time=com.fasterxml.jackson.annotation')
             // Helidon
             buildArgs.add('--initialize-at-build-time=io.helidon')
             // SQLite JDBC
