@@ -14,7 +14,7 @@ function ColumnComponent({ props, buildChild }: { props: Record<string, unknown>
   const weightStyle = getWeightStyle(props.weight);
 
   return (
-    <div className="flex flex-col box-border gap-4 min-h-full" style={{ justifyContent: justify, alignItems: align, ...weightStyle }}>
+    <div className="flex flex-col box-border gap-4 min-h-full w-full" style={{ justifyContent: justify, alignItems: align, ...weightStyle }}>
       {children.map((child: string | { id: string; basePath?: string }, i: number) => {
         if (typeof child === 'string') return <Fragment key={`${child}-${i}`}>{buildChild(child)}</Fragment>;
         if (child && typeof child === 'object' && 'id' in child) return <Fragment key={`${child.id}-${i}`}>{buildChild(child.id, child.basePath)}</Fragment>;

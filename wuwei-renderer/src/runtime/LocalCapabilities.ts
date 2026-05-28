@@ -32,7 +32,7 @@ export function createLocalCapabilities(
             const key = `__wuwei_canvas_${canvasId}`;
             let retries = 0;
             const tryDraw = () => {
-              const entry = (window as Record<string, unknown>)[key] as
+              const entry = (window as unknown as Record<string, unknown>)[key] as
                 | { el: HTMLCanvasElement; draw: (cmds: Record<string, unknown>[]) => void }
                 | undefined;
               if (entry) {

@@ -1,7 +1,13 @@
 import { useState, useEffect } from 'react';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/wv-components/ui/tabs';
 import { ScrollArea } from '@/wv-components/ui/scroll-area';
-import { Tooltip } from '@/wv-components/ui/tooltip';
+import { PrismLight as SyntaxHighlighter } from 'react-syntax-highlighter';
+import jsonLang from 'react-syntax-highlighter/dist/esm/languages/prism/json';
+import jsLang from 'react-syntax-highlighter/dist/esm/languages/prism/javascript';
+import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
+
+SyntaxHighlighter.registerLanguage('json', jsonLang);
+SyntaxHighlighter.registerLanguage('javascript', jsLang);
 
 interface SkillSource {
   skillId: string;
@@ -37,7 +43,7 @@ export function WwWorkbench({ onClose }: WwWorkbenchProps) {
           <line x1="16" y1="17" x2="8" y2="17" />
           <polyline points="10 9 9 9 8 9" />
         </svg>
-        <p>点击 Skill 旁的查看按钮</p>
+        <p>请从技能标题栏点击查看源码</p>
       </div>
     );
   }
@@ -46,14 +52,16 @@ export function WwWorkbench({ onClose }: WwWorkbenchProps) {
     try { return JSON.stringify(JSON.parse(json), null, 2); } catch { return json; }
   }
 
-  function getContent(): string {
+  function getContent(): { code: string; language: string } {
     switch (activeTab) {
-      case 'skillJson': return formatJson(source!.skillJson);
-      case 'uiJson': return formatJson(source!.uiJson);
-      case 'handlersJs': return source!.handlersJs;
-      default: return '';
+      case 'skillJson': return { code: formatJson(source!.skillJson), language: 'json' };
+      case 'uiJson': return { code: formatJson(source!.uiJson), language: 'json' };
+      case 'handlersJs': return { code: source!.handlersJs, language: 'javascript' };
+      default: return { code: '', language: 'json' };
     }
   }
+
+  const { code, language } = getContent();
 
   return (
     <div className="flex flex-col h-full animate-fade-in">
@@ -61,19 +69,18 @@ export function WwWorkbench({ onClose }: WwWorkbenchProps) {
       <div className="flex items-center gap-2 px-4 py-3 border-b flex-shrink-0">
         <div className="flex-1 min-w-0">
           <p className="text-sm font-semibold font-mono truncate">{source.skillId}</p>
-          <p className="text-[10px] text-muted-foreground">源码查看</p>
+          <p className="text-[10px] text-muted-foreground">源码预览</p>
         </div>
-        <Tooltip content="关闭">
-          <button
-            className="p-1.5 rounded-md hover:bg-accent transition-colors text-muted-foreground hover:text-foreground"
-            onClick={onClose}
-          >
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-              <line x1="4" y1="4" x2="12" y2="12" />
-              <line x1="12" y1="4" x2="4" y2="12" />
-            </svg>
-          </button>
-        </Tooltip>
+        <button
+          className="p-1.5 rounded-md hover:bg-accent transition-colors text-muted-foreground hover:text-foreground"
+          onClick={onClose}
+          title="关闭"
+        >
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+            <line x1="4" y1="4" x2="12" y2="12" />
+            <line x1="12" y1="4" x2="4" y2="12" />
+          </svg>
+        </button>
       </div>
 
       {/* Tabs */}
@@ -96,9 +103,19 @@ export function WwWorkbench({ onClose }: WwWorkbenchProps) {
       {/* Content */}
       <div className="flex-1 min-h-0 p-4">
         <ScrollArea className="h-full">
-          <pre className="bg-muted border rounded-md p-4 font-mono text-xs whitespace-pre-wrap leading-relaxed text-foreground">
-            {getContent()}
-          </pre>
+          <SyntaxHighlighter
+            language={language}
+            style={oneDark}
+            customStyle={{
+              margin: 0,
+              borderRadius: '0.5rem',
+              fontSize: '0.8125rem',
+              lineHeight: '1.6',
+            }}
+            showLineNumbers
+          >
+            {code}
+          </SyntaxHighlighter>
         </ScrollArea>
       </div>
     </div>

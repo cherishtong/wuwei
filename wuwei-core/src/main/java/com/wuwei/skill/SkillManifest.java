@@ -39,4 +39,13 @@ public record SkillManifest(
         Object quota = network.get("quota");
         return quota != null ? quota.toString() : "100/min";
     }
+
+    /** Human-readable name from meta.name, falling back to id. */
+    public String name() {
+        if (meta != null && meta.containsKey("name")) {
+            Object n = meta.get("name");
+            if (n != null && !n.toString().isBlank()) return n.toString();
+        }
+        return id;
+    }
 }

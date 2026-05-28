@@ -1,85 +1,95 @@
-// bridge.ts — WebSocket messages → window CustomEvent dispatch
+// bridge.ts — WebSocket messages → store dispatch + window CustomEvent (backward compat)
 import { kernel } from './kernel';
+import { conversationStore } from './stores/ConversationStore';
+import { surfaceStore } from './stores/SurfaceStore';
+import { systemStore } from './stores/SystemStore';
+import { consoleStore } from './stores/ConsoleStore';
 
 function dispatch(name: string, detail: unknown) {
   window.dispatchEvent(new CustomEvent(name, { detail }));
 }
 
 export function initBridge() {
-  // Request OS-level notification permission early
   if ('Notification' in window && Notification.permission === 'default') {
     Notification.requestPermission();
   }
 
-  kernel.onMessage((msg: Record<string, any>) => {
+  // ns:conv — conversation updates
+  kernel.onNamespace('conv', (msg: Record<string, any>) => {
+    conversationStore.dispatch(msg);
     switch (msg.type) {
-      case 'kernel-ready':
-        dispatch('kernel-ready', msg);
-        // Request skill list on connect
-        kernel.listSkills();
+      case 'conversation-update':
+        dispatch('conversation-update', msg);
         break;
-      case 'skill-list':
-        dispatch('skill-list', msg);
+      case 'conversation-created':
+        dispatch('conversation-created', msg);
         break;
-      case 'skill-loading':
-        dispatch('skill-loading', msg);
+      case 'conversation-list':
+        dispatch('conversation-list', msg);
         break;
-      case 'skill-activated':
-        dispatch('skill-activated', msg);
+      case 'conversation-detail':
+        dispatch('conversation-detail', msg);
         break;
-      case 'skill-deactivated':
-        dispatch('skill-deactivated', msg);
+      case 'conversation-deleted':
+        dispatch('conversation-deleted', msg);
         break;
-      case 'a2ui-patch':
-        dispatch('a2ui-patch', msg);
+      case 'conversation-ready':
+        dispatch('conversation-ready', msg);
         break;
-      case 'event-ack':
-        dispatch('event-ack', msg);
+      case 'thread-active-skill-set':
+        dispatch('thread-active-skill-set', msg);
         break;
-      case 'gate-request':
-        dispatch('gate-request', msg);
-        break;
-      case 'plan-step':
-        dispatch('plan-step', msg);
-        break;
-      case 'repair-attempt':
-        dispatch('repair-attempt', msg);
-        break;
-      case 'skill-log':
-        dispatch('skill-log', msg);
-        break;
-      case 'guardian-warning':
-        dispatch('guardian-warning', msg);
-        break;
-      case 'kernel-error':
-        dispatch('kernel-error', msg);
-        break;
-      case 'system-notify':
-        dispatch('system-notify', msg);
-        // Also show as actual OS notification when triggered by os.notify
-        try {
-          if ('Notification' in window && Notification.permission === 'granted') {
-            new Notification(msg.title || 'Wuwei', { body: msg.body || '' });
-          }
-        } catch { /* not available */ }
-        break;
-      case 'skill-source':
-        dispatch('skill-source', msg);
-        break;
-      case 'capability-proxy-result':
-        dispatch('capability-proxy-result', msg);
-        break;
-      case 'model-routing-list':
-        dispatch('model-routing-list', msg);
-        break;
-      case 'model-routing-updated':
-        dispatch('model-routing-updated', msg);
-        break;
-      case 'model-routing-deleted':
-        dispatch('model-routing-deleted', msg);
+      case 'thread-detail':
+        dispatch('thread-detail', msg);
         break;
       default:
-        console.debug('[bridge] unhandled message type:', msg.type);
+        dispatch(`conv:${msg.type}`, msg);
+    }
+  });
+
+  // ns:ui — A2UI rendering
+  kernel.onNamespace('ui', (msg: Record<string, any>) => {
+    surfaceStore.dispatch(msg);
+    dispatch(msg.type, msg);
+    // Keep conversationStore.activeSkillId in sync
+    if (msg.type === 'skill-activated' && msg.threadId) {
+      conversationStore.updateActiveSkillSilent(msg.threadId as string, msg.skillId as string);
+    } else if (msg.type === 'skill-deactivated' && msg.threadId) {
+      conversationStore.updateActiveSkillSilent(msg.threadId as string, null);
+    }
+  });
+
+  // ns:sys — system state
+  kernel.onNamespace('sys', (msg: Record<string, any>) => {
+    systemStore.dispatch(msg);
+    dispatch(msg.type, msg);
+    // OS notification for system-notify
+    if (msg.type === 'system-notify') {
+      try {
+        if ('Notification' in window && Notification.permission === 'granted') {
+          new Notification(msg.title || 'Wuwei', { body: msg.body || '' });
+        }
+      } catch { /* not available */ }
+    }
+  });
+
+  // ns:log — debug logs
+  kernel.onNamespace('log', (msg: Record<string, any>) => {
+    consoleStore.dispatch(msg);
+    dispatch(msg.type, msg);
+  });
+
+  // kernel-ready triggers skill list request
+  kernel.onNamespace('sys', (msg: Record<string, any>) => {
+    if (msg.type === 'kernel-ready') {
+      kernel.listSkills();
+    }
+  });
+
+  // Fallback: dispatch un-namespaced messages (e.g. skill-source)
+  kernel.onMessage((msg: Record<string, any>) => {
+    if (!msg.ns && msg.type) {
+      dispatch(msg.type, msg);
     }
   });
 }

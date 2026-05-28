@@ -165,6 +165,7 @@ async function onInit(__inputs__, capability) {
 - 材质：MeshStandardMaterial, MeshPhongMaterial, MeshBasicMaterial, MeshLambertMaterial, MeshNormalMaterial, MeshToonMaterial, PointsMaterial, LineBasicMaterial, LineDashedMaterial, SpriteMaterial, ShaderMaterial（参数均为对象 `{color, roughness, metalness, ...}`）
 - 对象：Mesh(geo,mat), Points(geo,mat), Line(geo,mat), Group()
 - 光源：AmbientLight(color,intensity), DirectionalLight(color,intensity), PointLight(color,intensity,distance?,decay?), SpotLight(color,intensity,distance?,angle?,penumbra?,decay?)
+- **颜色必须是完整的 6 位 hex 数字，例如 0xff8844、0x404040、0xffffff。绝对禁止只写 0x 后面不带数字。**
 - 辅助：AxesHelper(size), GridHelper(size,divisions,c1?,c2?)
 - 常量/工具：Color, Vector3, Shape, ExtrudeGeometry, MathUtils, BufferAttribute, DoubleSide, mergeGeometries(geoms)
 

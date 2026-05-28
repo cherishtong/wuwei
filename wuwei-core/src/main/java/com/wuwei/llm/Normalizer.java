@@ -123,6 +123,9 @@ public class Normalizer {
         // 5. Remove redundant "// Path: ..." comments that LLMs sometimes generate
         js = js.replaceAll("//\\s*(Path|File|Created|Generated|Author):.*\\n", "");
 
+        // 6. Fix bare 0x without hex digits (LLM sometimes generates T.Color(0x) etc.)
+        js = js.replaceAll("\\b0x(?=[,\\);\\s])", "0xffffff");
+
         return js;
     }
 }

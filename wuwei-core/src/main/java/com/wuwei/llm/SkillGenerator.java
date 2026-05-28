@@ -11,6 +11,7 @@ import com.wuwei.skill.SkillGenome;
 import com.wuwei.skill.SkillManager;
 import com.wuwei.skill.SkillManifest;
 import com.wuwei.snapshot.SnapshotService;
+import com.wuwei.store.ConversationService;
 import com.wuwei.store.SkillMemoryService;
 import com.wuwei.store.StoreService;
 import dev.langchain4j.model.chat.response.ChatResponse;
@@ -22,14 +23,20 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.time.LocalTime;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.function.BiConsumer;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -56,6 +63,8 @@ public class SkillGenerator {
     private final SnapshotService snapshotService;
     private final EventBus eventBus;
     private final ObjectMapper mapper;
+    private final ConversationService conversationService;
+    private volatile BiConsumer<String, Map<String, Object>> onMessageUpdate;
     private final String skillsBaseDir;
     private final int maxRepairAttempts;
     private final ExecutorService memoryExecutor = Executors.newVirtualThreadPerTaskExecutor();
@@ -66,6 +75,8 @@ public class SkillGenerator {
                           AstAuditor astAuditor, EcosystemGuardian guardian,
                           SkillManager skillManager, SnapshotService snapshotService,
                           EventBus eventBus, ObjectMapper mapper,
+                          ConversationService conversationService,
+                          BiConsumer<String, Map<String, Object>> onMessageUpdate,
                           int maxRepairAttempts) {
         this.agentFactory = agentFactory;
         this.memoryService = memoryService;
@@ -77,6 +88,8 @@ public class SkillGenerator {
         this.snapshotService = snapshotService;
         this.eventBus = eventBus;
         this.mapper = mapper;
+        this.conversationService = conversationService;
+        this.onMessageUpdate = onMessageUpdate;
         this.maxRepairAttempts = maxRepairAttempts;
 
         String home = System.getProperty("user.home");
@@ -84,6 +97,10 @@ public class SkillGenerator {
     }
 
     // ── Public API ──────────────────────────────────────────────
+
+    public void setOnMessageUpdate(BiConsumer<String, Map<String, Object>> callback) {
+        this.onMessageUpdate = callback;
+    }
 
     public boolean enabled() {
         return agentFactory != null;
@@ -94,14 +111,22 @@ public class SkillGenerator {
     }
 
     public String generate(String intent, Map<String, String> modelOverride) {
+        return generate(intent, modelOverride, null);
+    }
+
+    public String generate(String intent, Map<String, String> modelOverride, String threadId) {
+        return generate(intent, modelOverride, threadId, null);
+    }
+
+    public String generate(String intent, Map<String, String> modelOverride, String threadId, String genMsgId) {
         if (!enabled()) {
-            eventBus.publish(new KernelEvent.PlanStep("error", "LLM 服务未初始化，无法生成 Skill"));
+            stepUpdate(threadId, genMsgId, "generating", "生成技能代码", "error", "LLM 服务未初始化，无法生成 Skill");
             return null;
         }
 
         String existingSummary = existingSkillsSummary();
         String tmpSkillId = "new-" + UUID.randomUUID().toString().substring(0, 8);
-        return generateViaLlm(intent, existingSummary, tmpSkillId, modelOverride, null, null);
+        return generateViaLlm(intent, existingSummary, tmpSkillId, modelOverride, null, null, threadId, genMsgId);
     }
 
     public String refine(String skillId, String feedback) {
@@ -109,15 +134,23 @@ public class SkillGenerator {
     }
 
     public String refine(String skillId, String feedback, Map<String, String> modelOverride) {
+        return refine(skillId, feedback, modelOverride, null);
+    }
+
+    public String refine(String skillId, String feedback, Map<String, String> modelOverride, String threadId) {
+        return refine(skillId, feedback, modelOverride, threadId, null);
+    }
+
+    public String refine(String skillId, String feedback, Map<String, String> modelOverride, String threadId, String genMsgId) {
         if (!enabled()) {
-            eventBus.publish(new KernelEvent.PlanStep("error", "LLM 服务未初始化，无法优化 Skill"));
+            stepUpdate(threadId, genMsgId, "generating", "优化技能代码", "error", "LLM 服务未初始化，无法优化 Skill");
             return null;
         }
 
         Path skillDir = Paths.get(skillsBaseDir, skillId);
         Path genomeDir = skillDir.resolve("genome");
         if (!Files.isDirectory(skillDir)) {
-            eventBus.publish(new KernelEvent.PlanStep("error", "Skill 目录不存在: " + skillId));
+            stepUpdate(threadId, genMsgId, "generating", "优化技能代码", "error", "Skill 目录不存在: " + skillId);
             return null;
         }
 
@@ -127,11 +160,11 @@ public class SkillGenerator {
             uiJson = Files.readString(genomeDir.resolve("ui.json"));
             handlersJs = Files.readString(genomeDir.resolve("handlers.js"));
         } catch (Exception e) {
-            eventBus.publish(new KernelEvent.PlanStep("error", "无法读取 Skill 文件: " + e.getMessage()));
+            stepUpdate(threadId, genMsgId, "generating", "优化技能代码", "error", "无法读取 Skill 文件: " + e.getMessage());
             return null;
         }
 
-        return refineViaLlm(skillId, feedback, skillJson, uiJson, handlersJs, modelOverride);
+        return refineViaLlm(skillId, feedback, skillJson, uiJson, handlersJs, modelOverride, threadId, genMsgId);
     }
 
     // ── LLM path ────────────────────────────────────────────────
@@ -139,16 +172,19 @@ public class SkillGenerator {
     private String generateViaLlm(String intent, String existingSummary, String skillId,
                                    Map<String, String> modelOverride,
                                    Map<String, Object> memoryCtx,
-                                   Map<String, String> currentFiles) {
+                                   Map<String, String> currentFiles,
+                                   String threadId, String genMsgId) {
 
         SkillGenerateAgent agent = agentFactory.createGenerateAgent(skillId, modelOverride);
+        System.out.println("[kernel] [generate] agent created, skillId=" + skillId);
         Map<String, String> routing = storeService.getModelRouting("skill/generate");
         String modelDesc = modelOverride != null && modelOverride.containsKey("model")
             ? modelOverride.get("model")
             : routing.getOrDefault("model", "unknown");
+        System.out.println("[kernel] [generate] routing: provider=" + routing.getOrDefault("provider","?") + " model=" + modelDesc + " apiUrl=" + routing.getOrDefault("apiUrl","?") + " hasApiKey=" + (!routing.getOrDefault("apiKey","").isEmpty()));
 
-        eventBus.publish(new KernelEvent.PlanStep("generating",
-            "正在生成 Skill（" + routing.getOrDefault("provider", "") + "/" + modelDesc + "）..."));
+        stepUpdate(threadId, genMsgId, "generating", "生成技能代码", "in_progress",
+            "正在生成 Skill（" + routing.getOrDefault("provider", "") + "/" + modelDesc + "）...");
 
         String userMessage = PromptBuilder.buildGenerate(intent,
             List.of(existingSummary.split("\n")), memoryCtx, currentFiles);
@@ -157,16 +193,20 @@ public class SkillGenerator {
             StringBuilder acc = new StringBuilder();
             CompletableFuture<String> done = new CompletableFuture<>();
 
+            System.out.println("[kernel] [generate] calling agent.generate()...");
             log.info("Starting LLM generate call (model={})", modelDesc);
             TokenStream stream = agent.generate(userMessage, skillId);
+            System.out.println("[kernel] [generate] TokenStream obtained, registering callbacks");
             log.info("TokenStream obtained, registering callbacks");
 
+            var handlersSectionReached = new java.util.concurrent.atomic.AtomicBoolean(false);
             stream
                 .onPartialResponse(partial -> {
                     acc.append(partial);
-                    String text = acc.toString();
-                    if (text.contains("=== handlers.js ===")) {
-                        eventBus.publish(new KernelEvent.PlanStep("generating", "正在生成处理逻辑..."));
+                    if (!handlersSectionReached.get()
+                        && acc.toString().contains("=== handlers.js ===")) {
+                        handlersSectionReached.set(true);
+                        stepUpdate(threadId, genMsgId, "generating", "生成技能代码", "in_progress", "正在生成处理逻辑...");
                     }
                 })
                 .onCompleteResponse((ChatResponse response) -> {
@@ -175,9 +215,11 @@ public class SkillGenerator {
                 })
                 .onError(done::completeExceptionally)
                 .start();
+            System.out.println("[kernel] [generate] Stream.start() called, waiting for completion...");
             log.info("Stream started, waiting for completion");
 
             String raw = done.get(360, TimeUnit.SECONDS);
+            System.out.println("[kernel] [generate] LLM response received, length=" + raw.length());
 
             String preview = raw.length() > 600 ? raw.substring(0, 600) + "..." : raw;
             log.info("LLM raw response preview ({} chars total):\n{}", raw.length(), preview);
@@ -186,11 +228,12 @@ public class SkillGenerator {
 
             String designDecision = OutputParser.extractDesignDecision(raw);
 
-            eventBus.publish(new KernelEvent.PlanStep("generating", "生成完成"));
+            stepUpdate(threadId, genMsgId, "generating", "生成技能代码", "done", "生成完成");
             return auditAndInstall(normalizer.normalize(files), skillId, modelOverride,
-                intent, "Initial Design", designDecision);
+                intent, "Initial Design", designDecision, threadId, genMsgId);
 
         } catch (Exception e) {
+            System.out.println("[kernel] [generate] EXCEPTION: " + e.getClass().getName() + ": " + (e.getMessage() != null ? e.getMessage() : "(null)"));
             log.error("LLM generation failed", e);
             String msg = e.getMessage();
             if (msg == null || msg.isBlank()) {
@@ -198,14 +241,16 @@ public class SkillGenerator {
                 msg = e.getClass().getSimpleName()
                     + (cause != null ? " caused by " + cause.getClass().getSimpleName() + ": " + cause.getMessage() : "");
             }
-            eventBus.publish(new KernelEvent.PlanStep("error", "LLM 生成失败: " + msg));
+            eventBus.publish(new KernelEvent.PlanStep("error", "LLM 生成失败: " + msg, threadId));
+            stepUpdate(threadId, genMsgId, "generating", "生成技能代码", "error", "LLM 调用失败: " + msg);
             return null;
         }
     }
 
     private String refineViaLlm(String skillId, String feedback,
                                  String skillJson, String uiJson, String handlersJs,
-                                 Map<String, String> modelOverride) {
+                                 Map<String, String> modelOverride, String threadId,
+                                 String genMsgId) {
 
         SkillGenerateAgent agent = agentFactory.createGenerateAgent(skillId, modelOverride);
         Map<String, String> routing = storeService.getModelRouting("skill/generate");
@@ -213,8 +258,8 @@ public class SkillGenerator {
             ? modelOverride.get("model")
             : routing.getOrDefault("model", "unknown");
 
-        eventBus.publish(new KernelEvent.PlanStep("generating",
-            "正在优化 Skill " + skillId + "（" + routing.getOrDefault("provider", "") + "/" + modelDesc + "）..."));
+        stepUpdate(threadId, genMsgId, "generating", "优化技能代码", "in_progress",
+            "正在优化 Skill " + skillId + "（" + routing.getOrDefault("provider", "") + "/" + modelDesc + "）...");
 
         // ChatMemory auto-loads conversation history via @MemoryId — no manual evolution reading
         Map<String, Object> memoryCtx = memoryService.getMemoryContext(skillId);
@@ -253,7 +298,7 @@ public class SkillGenerator {
             String designTitle = "Refine: " + feedback.substring(0, Math.min(60, feedback.length()));
 
             return auditAndInstall(normalized, skillId, modelOverride,
-                null, designTitle, designDecision);
+                null, designTitle, designDecision, threadId, genMsgId);
 
         } catch (Exception e) {
             log.error("LLM refine failed for {}", skillId, e);
@@ -263,7 +308,8 @@ public class SkillGenerator {
                 msg = e.getClass().getSimpleName()
                     + (cause != null ? " caused by " + cause.getClass().getSimpleName() + ": " + cause.getMessage() : "");
             }
-            eventBus.publish(new KernelEvent.PlanStep("error", "LLM 优化失败: " + msg));
+            eventBus.publish(new KernelEvent.PlanStep("error", "LLM 优化失败: " + msg, threadId));
+            stepUpdate(threadId, genMsgId, "generating", "优化技能代码", "error", "LLM 优化失败: " + msg);
             return null;
         }
     }
@@ -300,8 +346,9 @@ public class SkillGenerator {
 
     private String auditAndInstall(SkillFiles initialFiles, String skillId,
                                     Map<String, String> modelOverride,
-                                    String intent, String designTitle, String designDecision) {
-        eventBus.publish(new KernelEvent.PlanStep("normalizing", "正在规范化输出..."));
+                                    String intent, String designTitle, String designDecision,
+                                    String threadId, String genMsgId) {
+        stepUpdate(threadId, genMsgId, "normalizing", "规范化输出", "in_progress", "正在规范化输出...");
         SkillFiles finalFiles = initialFiles;
 
         for (int attempt = 0; attempt <= maxRepairAttempts; attempt++) {
@@ -315,8 +362,18 @@ public class SkillGenerator {
 
                 SkillGenome genome = new SkillGenome(finalFiles.uiJson(), finalFiles.handlersJs());
 
-                eventBus.publish(new KernelEvent.PlanStep("auditing",
-                    "正在审计 Skill " + manifest.id() + "..."));
+                stepUpdate(threadId, genMsgId, "auditing", "安全审计", "in_progress", "正在审计 Skill " + manifest.id() + "...");
+
+                // DEBUG: find all lines containing "0x" to see raw hex color values
+                String js = finalFiles.handlersJs();
+                if (js != null) {
+                    String[] lines = js.split("\n");
+                    for (int li = 0; li < lines.length; li++) {
+                        if (lines[li].contains("0x")) {
+                            System.out.println("[audit-debug] attempt=" + attempt + " line" + (li+1) + " 0x found: " + lines[li].trim());
+                        }
+                    }
+                }
 
                 astAuditor.audit(manifest, genome);
                 guardian.check(manifest.id(), genome);
@@ -329,7 +386,7 @@ public class SkillGenerator {
                         "audit-passed", modelOverride);
                 }
 
-                String installedId = installSkill(manifest, finalFiles);
+                String installedId = installSkill(manifest, finalFiles, threadId, genMsgId);
                 if (installedId != null) {
                     memoryExecutor.submit(() -> persistMemory(installedId, intent, designTitle, designDecision));
                 }
@@ -338,18 +395,19 @@ public class SkillGenerator {
             } catch (GateException e) {
                 String errorDetail = "[" + e.getCode() + "] " + e.getMessage();
                 log.warn("Audit failed (attempt {}): {}", attempt + 1, errorDetail);
+                System.out.println("[audit] FAIL attempt=" + (attempt + 1) + " code=" + e.getCode() + " msg=" + e.getMessage());
 
                 String realSkillId = extractSkillId(finalFiles.skillJson());
                 eventBus.publish(new KernelEvent.RepairAttempt(realSkillId, attempt + 1, errorDetail));
 
                 if (attempt >= maxRepairAttempts) {
-                    eventBus.publish(new KernelEvent.PlanStep("error",
-                        "修复已耗尽（" + maxRepairAttempts + " 次），最后的错误: " + errorDetail));
+                    stepUpdate(threadId, genMsgId, "repairing", "自动修复", "error",
+                        "修复已耗尽（" + maxRepairAttempts + " 次），最后的错误: " + errorDetail);
                     return null;
                 }
 
-                eventBus.publish(new KernelEvent.PlanStep("repairing",
-                    "第 " + (attempt + 1) + "/" + maxRepairAttempts + " 次修复中: " + e.getCode()));
+                stepUpdate(threadId, genMsgId, "repairing", "自动修复", "in_progress",
+                    "第 " + (attempt + 1) + "/" + maxRepairAttempts + " 次修复中: " + e.getCode());
 
                 try {
                     SkillFiles repaired = llmRepair(finalFiles, realSkillId, errorDetail, attempt + 1, modelOverride);
@@ -361,7 +419,7 @@ public class SkillGenerator {
                     finalFiles = normalizer.normalize(repairedFixed);
                 } catch (Exception repairEx) {
                     log.error("Repair call failed", repairEx);
-                    eventBus.publish(new KernelEvent.PlanStep("error", "修复调用失败: " + repairEx.getMessage()));
+                    stepUpdate(threadId, genMsgId, "repairing", "自动修复", "error", "修复调用失败: " + repairEx.getMessage());
                     return null;
                 }
             }
@@ -420,11 +478,10 @@ public class SkillGenerator {
 
     // ── Install generated skill ─────────────────────────────────
 
-    private String installSkill(SkillManifest manifest, SkillFiles files) {
+    private String installSkill(SkillManifest manifest, SkillFiles files, String threadId, String genMsgId) {
         String skillId = manifest.id();
 
-        eventBus.publish(new KernelEvent.PlanStep("installing",
-            "正在安装 Skill: " + skillId + "..."));
+        stepUpdate(threadId, genMsgId, "installing", "安装部署", "in_progress", "正在安装 Skill: " + skillId + "...");
 
         try {
             Path skillDir = Paths.get(skillsBaseDir, skillId);
@@ -467,23 +524,113 @@ public class SkillGenerator {
                 skillManager.loadFromDirectory(skillDir);
             } catch (Exception e) {
                 log.error("Failed to load generated skill {}: {}", skillId, e.getMessage());
-                eventBus.publish(new KernelEvent.PlanStep("error", "Skill 加载失败: " + e.getMessage()));
+                stepUpdate(threadId, genMsgId, "installing", "安装部署", "error", "Skill 加载失败: " + e.getMessage());
                 return null;
             }
 
-            skillManager.activate(skillId);
+            // Mark all steps as done before activation
+            for (String key : List.of("generating", "normalizing", "auditing", "repairing", "installing")) {
+                stepUpdate(threadId, genMsgId, key, stepLabel(key), "done", "Skill " + skillId + " 已生成并激活");
+            }
 
-            eventBus.publish(new KernelEvent.PlanStep("done", "Skill " + skillId + " 已生成并激活"));
+            // Push final generation card with skillId set
+            if (onMessageUpdate != null && genMsgId != null) {
+                Map<String, Map<String, String>> genSteps = generationSteps.get(genMsgId);
+                if (genSteps != null) {
+                    List<Map<String, String>> stepsList = new ArrayList<>();
+                    for (String k : new String[]{"generating", "normalizing", "auditing", "repairing", "installing"}) {
+                        if (genSteps.containsKey(k)) stepsList.add(genSteps.get(k));
+                    }
+                    Map<String, Object> meta = new LinkedHashMap<>();
+                    meta.put("type", "generation");
+                    meta.put("steps", stepsList);
+                    meta.put("skillId", skillId);
+                    meta.put("allDone", true);
+
+                    Map<String, Object> message = new LinkedHashMap<>();
+                    message.put("id", genMsgId);
+                    message.put("role", "assistant");
+                    message.put("content", "");
+                    message.put("time", timeStr());
+                    message.putAll(meta);
+
+                    onMessageUpdate.accept(threadId, message);
+                }
+            }
+
+            skillManager.activate(skillId, threadId);
             return skillId;
 
         } catch (Exception e) {
             log.error("Failed to install generated skill {}: {}", skillId, e.getMessage());
-            eventBus.publish(new KernelEvent.PlanStep("error", "安装失败: " + e.getMessage()));
+            stepUpdate(threadId, genMsgId, "installing", "安装部署", "error", "安装失败: " + e.getMessage());
             return null;
         }
     }
 
     // ── Helpers ─────────────────────────────────────────────────
+
+    private String timeStr() {
+        return LocalTime.now().format(DateTimeFormatter.ofPattern("HH:mm"));
+    }
+
+    private static String stepLabel(String key) {
+        return switch (key) {
+            case "generating" -> "生成技能代码";
+            case "normalizing" -> "规范化输出";
+            case "auditing" -> "安全审计";
+            case "repairing" -> "自动修复";
+            case "installing" -> "安装部署";
+            default -> key;
+        };
+    }
+
+    /** Write a step message to the conversation DB and push update to frontend. */
+    private void stepUpdate(String threadId, String genMsgId, String key, String label, String status, String desc) {
+        if (threadId == null || threadId.isEmpty() || genMsgId == null) return;
+
+        // Aggregate step state via onMessageUpdate callback
+        if (onMessageUpdate != null) {
+            generationSteps.computeIfAbsent(genMsgId, k -> new LinkedHashMap<>());
+            Map<String, Map<String, String>> genSteps = generationSteps.get(genMsgId);
+            Map<String, String> step = new LinkedHashMap<>();
+            step.put("key", key);
+            step.put("label", label);
+            step.put("status", status);
+            genSteps.put(key, step);
+
+            // Build message record with aggregated steps
+            List<Map<String, String>> stepsList = new ArrayList<>();
+            for (String k : new String[]{"generating", "normalizing", "auditing", "repairing", "installing"}) {
+                if (genSteps.containsKey(k)) {
+                    stepsList.add(genSteps.get(k));
+                }
+            }
+
+            boolean allDone = stepsList.stream()
+                .allMatch(s -> "done".equals(s.get("status")));
+
+            Map<String, Object> meta = new LinkedHashMap<>();
+            meta.put("type", "generation");
+            meta.put("steps", stepsList);
+            meta.put("skillId", null); // updated by installSkill
+            meta.put("allDone", allDone);
+
+            Map<String, Object> message = new LinkedHashMap<>();
+            message.put("id", genMsgId);
+            message.put("role", "assistant");
+            message.put("content", "");
+            message.put("time", timeStr());
+            message.putAll(meta);
+
+            onMessageUpdate.accept(threadId, message);
+        }
+
+        eventBus.publish(new KernelEvent.PlanStep(status, desc, threadId));
+    }
+
+    // In-memory aggregation of generation steps keyed by genMsgId
+    private final ConcurrentHashMap<String, Map<String, Map<String, String>>> generationSteps = new ConcurrentHashMap<>();
 
     private String existingSkillsSummary() {
         var skills = skillManager.listSkills();

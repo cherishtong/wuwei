@@ -138,13 +138,14 @@ public class AgentFactory {
     }
 
     private StreamingChatModel buildStreamingModel(LlmConfig config) {
+        System.out.println("[kernel] [AgentFactory] buildStreamingModel: baseUrl=" + resolveBaseUrl(config) + " model=" + config.model() + " hasApiKey=" + (!resolveApiKey(config).isEmpty()));
         return OpenAiStreamingChatModel.builder()
             .baseUrl(resolveBaseUrl(config))
             .apiKey(resolveApiKey(config))
             .modelName(config.model())
             .timeout(Duration.ofSeconds(300))
-            .logRequests(false)
-            .logResponses(false)
+            .logRequests(true)
+            .logResponses(true)
             .build();
     }
 

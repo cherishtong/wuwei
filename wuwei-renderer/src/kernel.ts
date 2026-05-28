@@ -5,8 +5,24 @@
 let ws: WebSocket | null = null;
 const queue: string[] = [];
 const handlers: ((msg: Record<string, unknown>) => void)[] = [];
+const nsHandlers: Map<string, ((msg: Record<string, unknown>) => void)[]> = new Map();
+const pending = new Map<string, { resolve: (v: Record<string, unknown>) => void; reject: (e: Error) => void }>();
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let isTauri = false;
+
+function request(msg: Record<string, unknown>, timeoutMs = 30000): Promise<Record<string, unknown>> {
+  return new Promise((resolve, reject) => {
+    const correlationId = crypto.randomUUID();
+    pending.set(correlationId, { resolve, reject });
+    send({ ...msg, correlationId });
+    setTimeout(() => {
+      if (pending.has(correlationId)) {
+        pending.delete(correlationId);
+        reject(new Error(`Request timeout: ${msg.type}`));
+      }
+    }, timeoutMs);
+  });
+}
 
 async function getPort(): Promise<number> {
   try {
@@ -42,7 +58,18 @@ async function connect() {
   ws.onmessage = (e) => {
     try {
       const msg = JSON.parse(e.data);
+      // Resolve pending request if correlationId matches
+      if (msg.correlationId && pending.has(msg.correlationId as string)) {
+        pending.get(msg.correlationId as string)!.resolve(msg);
+        pending.delete(msg.correlationId as string);
+        return;
+      }
       handlers.forEach(h => h(msg));
+      // Dispatch by namespace
+      const ns = msg.ns as string | undefined;
+      if (ns && nsHandlers.has(ns)) {
+        nsHandlers.get(ns)!.forEach(h => h(msg));
+      }
     } catch (err) {
       console.warn('[kernel] failed to parse message', err);
     }
@@ -121,12 +148,39 @@ export const kernel = {
     handlers.push(h);
   },
 
-  sendIntent(text: string, modelOverride?: { provider?: string; model?: string; apiKey?: string; apiUrl?: string }) {
-    send({ type: 'user-intent', payload: { text, ...modelOverride } });
+  /** Subscribe to messages in a specific namespace. */
+  onNamespace(ns: string, h: (msg: Record<string, unknown>) => void) {
+    if (!nsHandlers.has(ns)) {
+      nsHandlers.set(ns, []);
+    }
+    nsHandlers.get(ns)!.push(h);
+    return () => {
+      const arr = nsHandlers.get(ns);
+      if (arr) {
+        const idx = arr.indexOf(h);
+        if (idx >= 0) arr.splice(idx, 1);
+      }
+    };
   },
 
-  refineSkill(skillId: string, feedback: string, modelOverride?: { provider?: string; model?: string; apiKey?: string; apiUrl?: string }) {
-    send({ type: 'refine-skill', skillId, payload: { feedback, ...modelOverride } });
+  /** Subscribe to conversation-update messages (ns:conv). */
+  onConversationUpdate(fn: (msg: Record<string, unknown>) => void) {
+    return this.onNamespace('conv', (msg) => {
+      if (msg.type === 'conversation-update') fn(msg);
+    });
+  },
+
+  /** Subscribe to A2UI events (ns:ui). */
+  onUiEvent(fn: (msg: Record<string, unknown>) => void) {
+    return this.onNamespace('ui', fn);
+  },
+
+  sendIntent(text: string, threadId?: string, modelOverride?: { provider?: string; model?: string; apiKey?: string; apiUrl?: string }) {
+    send({ type: 'user-intent', threadId: threadId || null, payload: { text, ...modelOverride } });
+  },
+
+  refineSkill(skillId: string, feedback: string, threadId?: string, modelOverride?: { provider?: string; model?: string; apiKey?: string; apiUrl?: string }) {
+    send({ type: 'refine-skill', skillId, threadId: threadId || null, payload: { feedback, ...modelOverride } });
   },
 
   handleEvent(skillId: string, eventId: string, inputs: Record<string, unknown>) {
@@ -137,12 +191,12 @@ export const kernel = {
     send({ type: 'confirm-gate', skillId, capName, approved });
   },
 
-  activateSkill(skillId: string) {
-    send({ type: 'activate-skill', skillId });
+  activateSkill(skillId: string, threadId?: string) {
+    send({ type: 'activate-skill', skillId, threadId: threadId || null });
   },
 
-  deactivateSkill(skillId: string) {
-    send({ type: 'deactivate-skill', skillId });
+  deactivateSkill(skillId: string, threadId?: string) {
+    send({ type: 'deactivate-skill', skillId, threadId: threadId || null });
   },
 
   listSkills() {
@@ -167,5 +221,57 @@ export const kernel = {
 
   deleteModelRouting(taskType: string) {
     send({ type: 'delete-model-routing', taskType });
+  },
+
+  // ── Conversation persistence (kernel-backed SQLite) ──
+
+  async createConversation(skillId?: string, skillName?: string) {
+    const resp = await request({ type: 'create-conversation', skillId: skillId || '', skillName: skillName || '' });
+    return resp.conversation as Record<string, unknown>;
+  },
+
+  async findOrCreateConversation(skillId?: string, skillName?: string) {
+    const resp = await request({ type: 'find-or-create-conversation', skillId: skillId || '', skillName: skillName || '' });
+    return resp.conversation as Record<string, unknown>;
+  },
+
+  async listConversations() {
+    const resp = await request({ type: 'list-conversations' });
+    return resp.conversations as Array<Record<string, unknown>>;
+  },
+
+  async getConversation(convId: string) {
+    const resp = await request({ type: 'get-conversation', convId });
+    return resp.conversation as Record<string, unknown>;
+  },
+
+  async deleteConversation(convId: string) {
+    await request({ type: 'delete-conversation', convId });
+  },
+
+  async updateConversationTitle(convId: string, title: string) {
+    await request({ type: 'update-conversation-title', convId, title });
+  },
+
+  async getHomeConversation() {
+    const resp = await request({ type: 'get-home-conversation' });
+    return resp.conversation as Record<string, unknown>;
+  },
+
+  async setThreadActiveSkill(convId: string, skillId: string | null) {
+    await request({ type: 'set-thread-active-skill', convId, skillId: skillId || '' });
+  },
+
+  async getThread(convId: string) {
+    const resp = await request({ type: 'get-thread', convId });
+    return resp.thread as Record<string, unknown>;
+  },
+
+  skillHandoff(fromSkillId: string, toSkillId: string, threadId: string, context?: Record<string, unknown>) {
+    send({ type: 'skill-handoff', fromSkillId, toSkillId, threadId, context: context || {} });
+  },
+
+  deleteMessage(threadId: string, messageId: string) {
+    send({ type: 'delete-message', threadId, messageId });
   },
 };

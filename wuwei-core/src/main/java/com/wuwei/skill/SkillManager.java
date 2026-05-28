@@ -13,6 +13,7 @@ import com.wuwei.gate.GateException;
 import com.wuwei.sandbox.RuntimePool;
 import com.wuwei.sandbox.SkillRuntime;
 import com.wuwei.snapshot.SnapshotService;
+import com.wuwei.store.ConversationService;
 import com.wuwei.store.SkillStateStore;
 import com.wuwei.store.StoreService;
 import org.slf4j.Logger;
@@ -21,6 +22,8 @@ import org.slf4j.LoggerFactory;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.time.LocalTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -47,9 +50,12 @@ public class SkillManager {
     private final AstAuditor astAuditor;
     private final EcosystemGuardian ecosystemGuardian;
     private final SnapshotService snapshotService;
+    private final ConversationService conversationService;
+    private volatile Consumer<String> onConvUpdate;
 
     private final ConcurrentHashMap<String, LoadedSkill> skills = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, Long> lastModified = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, String> skillThreadMap = new ConcurrentHashMap<>();
     private final String skillsBaseDir;
 
     private static final int EVENT_TIMEOUT_SECONDS = 120; // 2 min — ai.ask / network.fetch may take time
@@ -61,7 +67,8 @@ public class SkillManager {
                         SkillStateStore stateStore, EventBus eventBus,
                         ObjectMapper mapper, AstAuditor astAuditor,
                         EcosystemGuardian ecosystemGuardian,
-                        SnapshotService snapshotService) {
+                        SnapshotService snapshotService,
+                        ConversationService conversationService) {
         this.runtimePool = runtimePool;
         this.a2uiEngine = a2uiEngine;
         this.capManager = capManager;
@@ -72,9 +79,14 @@ public class SkillManager {
         this.astAuditor = astAuditor;
         this.ecosystemGuardian = ecosystemGuardian;
         this.snapshotService = snapshotService;
+        this.conversationService = conversationService;
 
         String home = System.getProperty("user.home");
         this.skillsBaseDir = Paths.get(home, ".wuwei", "skills").toString();
+    }
+
+    public void setOnConvUpdate(Consumer<String> callback) {
+        this.onConvUpdate = callback;
     }
 
     // ── Startup ────────────────────────────────────────────────────
@@ -302,7 +314,8 @@ public class SkillManager {
             Consumer<List<Object>> flushPatches = patches -> {
                 List<Object> applied = a2uiEngine.applyPatches(skillId, patches);
                 if (!applied.isEmpty()) {
-                    eventBus.publish(new KernelEvent.A2uiPatch(skillId, applied));
+                    String tid = skillThreadMap.get(skillId);
+                    eventBus.publish(new KernelEvent.A2uiPatch(skillId, tid, applied));
                 }
             };
             runtime = runtimePool.create(manifest, handlersJs, capSet, flushPatches);
@@ -321,12 +334,21 @@ public class SkillManager {
     }
 
     public void activate(String skillId) {
+        activate(skillId, null);
+    }
+
+    public void activate(String skillId, String threadId) {
         LoadedSkill skill = skills.get(skillId);
         if (skill == null) {
             log.warn("Activate requested for unknown skill: {}", skillId);
             eventBus.publish(new KernelEvent.KernelError(skillId, "SKILL_NOT_FOUND",
                 "Skill not loaded: " + skillId));
             return;
+        }
+
+        if (threadId != null && !threadId.isEmpty()) {
+            skillThreadMap.put(skillId, threadId);
+            capManager.setSkillThreadId(skillId, threadId);
         }
 
         JsonNode tree = a2uiEngine.getTree(skillId);
@@ -341,7 +363,10 @@ public class SkillManager {
         }
 
         eventBus.publish(new KernelEvent.SkillActivated(
-            skillId, tree, List.of(), runtime, handlersJs, capabilities));
+            skillId, skill.manifest().name(), threadId, tree, List.of(), runtime, handlersJs, capabilities));
+
+        // Write skill-event to conversation history
+        writeConvEvent(threadId, skillId, "已激活技能 **" + skill.manifest().name() + "**", skillId);
 
         // Fire onInit asynchronously for kernel-js only.
         // Browser-js fires onInit on the frontend (no GraalJS).
@@ -351,19 +376,28 @@ public class SkillManager {
                 "init-" + id).start();
         }
 
-        log.info("Skill activated: {} (runtime={})", skillId, runtime);
+        log.info("Skill activated: {} (runtime={}, thread={})", skillId, runtime, threadId);
     }
 
     public void deactivate(String skillId) {
+        deactivate(skillId, null);
+    }
+
+    public void deactivate(String skillId, String threadId) {
         LoadedSkill skill = skills.get(skillId);
         if (skill == null) return;
+
+        if (threadId != null && !threadId.isEmpty()) {
+            skillThreadMap.remove(skillId);
+        }
 
         // Mark as stopped but keep runtime alive for re-activation
         skills.put(skillId, skill.withStatus(SkillStatus.STOPPED));
 
         // Notify frontend to clear workspace
-        eventBus.publish(new KernelEvent.SkillDeactivated(skillId));
-        log.info("Skill deactivated: {}", skillId);
+        eventBus.publish(new KernelEvent.SkillDeactivated(skillId, threadId));
+        writeConvEvent(threadId, skillId, "已停用技能 **" + skill.manifest().name() + "**", skillId);
+        log.info("Skill deactivated: {} (thread={})", skillId, threadId);
     }
 
     // ── Event handling ──────────────────────────────────────────────
@@ -406,7 +440,8 @@ public class SkillManager {
             if (!patches.isEmpty()) {
                 List<Object> applied = a2uiEngine.applyPatches(skillId, patches);
                 System.out.println("[SkillManager] applied patches=" + applied);
-                eventBus.publish(new KernelEvent.A2uiPatch(skillId, applied));
+                String tid = skillThreadMap.get(skillId);
+                eventBus.publish(new KernelEvent.A2uiPatch(skillId, tid, applied));
             }
 
             eventBus.publish(new KernelEvent.EventAck(skillId, eventId, "ok", latency));
@@ -444,6 +479,48 @@ public class SkillManager {
             long latency = System.currentTimeMillis() - start;
             eventBus.publish(new KernelEvent.EventAck(skillId, eventId, "error", latency));
             eventBus.publish(new KernelEvent.KernelError(skillId, "RUNTIME_ERROR", e.getMessage()));
+        }
+    }
+
+    // ── Handoff ───────────────────────────────────────────────────────
+
+    /**
+     * Transfer control from one skill to another within the same thread.
+     * Deactivates fromSkill, activates toSkill, and publishes a Handoff event.
+     */
+    public void handoff(String fromSkillId, String toSkillId, String threadId,
+                        Map<String, Object> context) {
+        LoadedSkill fromSkill = skills.get(fromSkillId);
+        LoadedSkill toSkill = skills.get(toSkillId);
+        if (fromSkill == null || toSkill == null) {
+            log.warn("Handoff failed: from={} to={} — one or both not loaded", fromSkillId, toSkillId);
+            eventBus.publish(new KernelEvent.KernelError(fromSkillId, "HANDOFF_FAILED",
+                "Handoff 失败: skill 未加载"));
+            return;
+        }
+
+        log.info("Handoff: {} -> {} (thread={})", fromSkillId, toSkillId, threadId);
+
+        // Deactivate the source skill
+        deactivate(fromSkillId, threadId);
+
+        // Publish handoff event (before activating target, so frontend can prepare)
+        eventBus.publish(new KernelEvent.SkillHandoff(fromSkillId, toSkillId, threadId, context));
+        writeConvEvent(threadId, toSkillId,
+            "**" + fromSkill.manifest().name() + "** → **" + toSkill.manifest().name() + "**", toSkillId);
+
+        // Activate the target skill with context
+        activate(toSkillId, threadId);
+
+        // Fire __init__ with handoff context for kernel-js skills
+        if (!"browser-js".equals(toSkill.manifest().runtime())) {
+            final String tid = toSkillId;
+            Map<String, Object> initInputs = new java.util.LinkedHashMap<>();
+            initInputs.put("__handoff__", true);
+            initInputs.put("__handoff_context__", context);
+            initInputs.put("__handoff_from__", fromSkillId);
+            new Thread(() -> handleEvent(tid, "__init__", initInputs, INIT_TIMEOUT_SECONDS),
+                "handoff-init-" + tid).start();
         }
     }
 
@@ -501,7 +578,8 @@ public class SkillManager {
             log.warn("Failed to delete skill dir for {}: {}", skillId, e.getMessage());
         }
 
-        eventBus.publish(new KernelEvent.SkillDeactivated(skillId));
+        String tid = skillThreadMap.remove(skillId);
+        eventBus.publish(new KernelEvent.SkillDeactivated(skillId, tid));
         log.info("Skill uninstalled: {}", skillId);
     }
 
@@ -530,6 +608,21 @@ public class SkillManager {
         });
         skills.clear();
         log.info("SkillManager shutdown complete");
+    }
+
+    // ── Conversation integration ─────────────────────────────────────
+
+    private String timeStr() {
+        return LocalTime.now().format(DateTimeFormatter.ofPattern("HH:mm"));
+    }
+
+    private void writeConvEvent(String threadId, String skillId, String content, String referenceId) {
+        if (threadId == null || threadId.isEmpty()) return;
+        conversationService.addMessageWithId(threadId, "skill-event", content, timeStr(),
+            Map.of("referenceId", referenceId));
+        if (onConvUpdate != null) {
+            onConvUpdate.accept(threadId);
+        }
     }
 
     // ── Queries ──────────────────────────────────────────────────────

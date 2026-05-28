@@ -36,6 +36,9 @@ public class CapabilityManager {
     /** Active CapabilitySets keyed by skillId — for runtime injection/NoOp */
     private final ConcurrentHashMap<String, CapabilitySet> activeCapSets = new ConcurrentHashMap<>();
 
+    /** Thread ID associated with each skill — set by SkillManager on activate */
+    private final ConcurrentHashMap<String, String> skillThreadMap = new ConcurrentHashMap<>();
+
     public CapabilityManager(SkillStateStore stateStore, NetworkCapability networkCap,
                              FileCapability fileCap, AiCapability aiCap, EventBus eventBus) {
         this.stateStore = stateStore;
@@ -58,6 +61,16 @@ public class CapabilityManager {
     /** Remove the capability set when a skill is unloaded. */
     public void remove(String skillId) {
         activeCapSets.remove(skillId);
+        skillThreadMap.remove(skillId);
+    }
+
+    /** Track which thread a skill is active in. Called by SkillManager. */
+    public void setSkillThreadId(String skillId, String threadId) {
+        if (threadId != null && !threadId.isEmpty()) {
+            skillThreadMap.put(skillId, threadId);
+        } else {
+            skillThreadMap.remove(skillId);
+        }
     }
 
     // ── Dynamic Permission ──────────────────────────────────────────
@@ -72,7 +85,8 @@ public class CapabilityManager {
         CompletableFuture<Boolean> future = new CompletableFuture<>();
         pendingGates.put(gateKey, future);
 
-        eventBus.publish(new KernelEvent.GateRequest(skillId, capName, reason));
+        String threadId = skillThreadMap.get(skillId);
+        eventBus.publish(new KernelEvent.GateRequest(skillId, threadId, capName, reason));
         log.info("Gate request published: {} cap={}", skillId, capName);
 
         try {

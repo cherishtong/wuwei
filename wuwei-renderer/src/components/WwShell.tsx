@@ -1,23 +1,33 @@
 import { useState, useEffect, useCallback } from 'react';
+import { Group, Panel, Separator } from 'react-resizable-panels';
 import { WwTitleBar } from './WwTitleBar';
-import { WwSidebar } from './WwSidebar';
-import { WwWorkspace } from './WwWorkspace';
+import { WwNavbar, type NavTab } from './WwNavbar';
 import { WwIntent } from './WwIntent';
 import { WwTerminal } from './WwTerminal';
 import { WwGateDialog } from './WwGateDialog';
-import { WwWorkbench } from './WwWorkbench';
 import { WwModelConfig } from './WwModelConfig';
-import { WelcomeScreen } from './WelcomeScreen';
+import { SkillsPage } from './SkillsPage';
+import { SystemPage } from './SystemPage';
+import { WuweiChat } from './WuweiChat';
+import { SkillPanel } from './SkillPanel';
+import { WwLoading } from './WwLoading';
+import { WwFloatingMenu } from './WwFloatingMenu';
+import { conversationStore } from '../stores/ConversationStore';
+import { kernel } from '../kernel';
 
 export function WwShell() {
   const [connected, setConnected] = useState(false);
   const [kernelVersion, setKernelVersion] = useState('');
+  const [skillCount, setSkillCount] = useState(0);
   const [activeSkillId, setActiveSkillId] = useState<string | null>(null);
-
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [detailOpen, setDetailOpen] = useState(false);
+  const [activeSkillName, setActiveSkillName] = useState<string>('');
+  const [globalSkillDetail, setGlobalSkillDetail] = useState<Record<string, unknown> | null>(null);
+  const [activeTab, setActiveTab] = useState<NavTab>('home');
   const [terminalOpen, setTerminalOpen] = useState(false);
   const [modelConfigOpen, setModelConfigOpen] = useState(false);
+  const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
+  const [skillPanelVisible, setSkillPanelVisible] = useState(false);
+  const [, forceRender] = useState(0);
 
   useEffect(() => {
     const onReady = (e: Event) => {
@@ -26,29 +36,68 @@ export function WwShell() {
       setKernelVersion(version || '');
     };
     const onSkillActivated = (e: Event) => {
-      setActiveSkillId((e as CustomEvent).detail.skillId);
+      const d = (e as CustomEvent).detail;
+      setActiveSkillId(d.skillId);
+      setActiveSkillName(d.skillName ?? d.skillId);
+      setGlobalSkillDetail(d);
+      setSkillPanelVisible(true);
     };
     const onSkillDeactivated = (e: Event) => {
       const { skillId } = (e as CustomEvent).detail;
       setActiveSkillId((prev) => (prev === skillId ? null : prev));
-      setDetailOpen(false);
+      setActiveSkillName('');
+      setGlobalSkillDetail(null);
     };
-    const onSkillSource = () => {
-      setDetailOpen(true);
+    const onSkillList = (e: Event) => {
+      const skills = (e as CustomEvent).detail.skills || [];
+      setSkillCount(skills.length);
     };
 
     window.addEventListener('kernel-ready', onReady);
     window.addEventListener('skill-activated', onSkillActivated);
     window.addEventListener('skill-deactivated', onSkillDeactivated);
-    window.addEventListener('skill-source', onSkillSource);
+    window.addEventListener('skill-list', onSkillList);
 
     return () => {
       window.removeEventListener('kernel-ready', onReady);
       window.removeEventListener('skill-activated', onSkillActivated);
       window.removeEventListener('skill-deactivated', onSkillDeactivated);
-      window.removeEventListener('skill-source', onSkillSource);
+      window.removeEventListener('skill-list', onSkillList);
     };
   }, []);
+
+  // Initialize thread
+  useEffect(() => {
+    conversationStore.ensureReady().then(() => {
+      const list = conversationStore.list();
+      if (list.length > 0) {
+        setActiveThreadId(list[0].id);
+      } else {
+        conversationStore.findOrCreate().then((c) => setActiveThreadId(c.id));
+      }
+    });
+  }, []);
+
+  // Listen for conversation store changes
+  useEffect(() => {
+    return conversationStore.onChange(() => {
+      forceRender((n) => n + 1);
+    });
+  }, []);
+
+  // Derive skill info from active thread
+  const activeConv = activeThreadId ? conversationStore.get(activeThreadId) : null;
+  const threadSkillId = activeConv?.activeSkillId ?? null;
+  const effectiveSkillId = threadSkillId ?? activeSkillId;
+  const effectiveDetail = globalSkillDetail;
+
+  const onDeactivateSkill = useCallback(() => {
+    if (effectiveSkillId && activeThreadId) {
+      conversationStore.updateActiveSkill(activeThreadId, null);
+      kernel.deactivateSkill(effectiveSkillId, activeThreadId);
+    }
+  }, [effectiveSkillId, activeThreadId]);
+
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -57,78 +106,111 @@ export function WwShell() {
         e.preventDefault();
         setTerminalOpen((v) => !v);
       }
-      if (e.ctrlKey && e.key === 'b') {
-        e.preventDefault();
-        setSidebarCollapsed((v) => !v);
-      }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   }, []);
 
-  const hasActiveSkill = activeSkillId !== null;
+  // "使用技能" card button → show skill panel or activate skill
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { skillId } = (e as CustomEvent).detail;
+      if (skillId && activeThreadId) {
+        if (effectiveSkillId !== skillId) {
+          kernel.activateSkill(skillId, activeThreadId);
+        }
+        setSkillPanelVisible(true);
+      }
+    };
+    window.addEventListener('view-active-skill', handler);
+    return () => window.removeEventListener('view-active-skill', handler);
+  }, [activeThreadId, effectiveSkillId]);
+
+  if (!connected) {
+    return <WwLoading />;
+  }
 
   return (
     <div className="flex flex-col h-screen bg-background">
-      {/* Title bar */}
-      <WwTitleBar
-        connected={connected}
-        kernelVersion={kernelVersion}
-        terminalOpen={terminalOpen}
-        onToggleTerminal={() => setTerminalOpen((v) => !v)}
-        detailOpen={detailOpen}
-        onToggleDetail={() => setDetailOpen((v) => !v)}
-        sidebarCollapsed={sidebarCollapsed}
-        onToggleSidebar={() => setSidebarCollapsed((v) => !v)}
-        onModelConfig={() => setModelConfigOpen(true)}
-      />
+      {/* Title bar: logo + theme + window controls */}
+      <WwTitleBar connected={connected} kernelVersion={kernelVersion} />
 
-      {/* Main layout */}
-      <div className="flex flex-1 min-h-0">
-        {/* Sidebar */}
-        <div
-          className="flex-shrink-0 border-r border-sidebar-border bg-sidebar overflow-hidden transition-all duration-200 ease-in-out"
-          style={{ width: sidebarCollapsed ? 0 : 260 }}
-        >
-          <WwSidebar onViewSource={() => setDetailOpen(true)} />
-        </div>
+      {/* Navbar: 首页 / 技能 / 系统 */}
+      <WwNavbar activeTab={activeTab} onTabChange={(tab) => { setActiveTab(tab); }} />
 
-        {/* Content area */}
-        <div className="flex-1 flex flex-col min-w-0">
-          {/* Workspace / Welcome */}
-          <div className="flex-1 min-h-0 overflow-auto">
-            {hasActiveSkill ? <WwWorkspace /> : <WelcomeScreen />}
-          </div>
-
-          {/* Intent bar */}
-          <div className="flex-shrink-0 border-t">
-            <WwIntent />
-          </div>
-
-          {/* Terminal (togglable) */}
-          {terminalOpen && (
-            <div
-              className="flex-shrink-0 border-t animate-slide-up"
-              style={{ height: 200 }}
+      {/* Content */}
+      <div className="flex-1 flex flex-col min-h-0">
+        <div className="flex-1 min-h-0 flex flex-col">
+          {activeTab === 'home' && activeThreadId && (
+            <Group
+              orientation="horizontal"
+              className="flex-1 min-h-0"
             >
-              <WwTerminal />
-            </div>
+              <Panel defaultSize={skillPanelVisible && effectiveSkillId ? 60 : 100} minSize={30}>
+                <WuweiChat threadId={activeThreadId} onThreadChange={setActiveThreadId} />
+              </Panel>
+
+              {skillPanelVisible && effectiveSkillId && (
+                <>
+                  <Separator
+                    style={{
+                      background: 'hsl(var(--border))',
+                      width: 4,
+                      cursor: 'col-resize',
+                    }}
+                  />
+                  <Panel defaultSize={40} minSize={20}>
+                    <div style={{ height: '100%', overflow: 'auto' }}>
+                      <SkillPanel
+                        skillId={effectiveSkillId}
+                        activeThreadId={activeThreadId}
+                        initDetail={effectiveDetail}
+                        onDeactivate={onDeactivateSkill}
+                      />
+                    </div>
+                  </Panel>
+                </>
+              )}
+            </Group>
+          )}
+          {activeTab === 'skills' && (
+            <SkillsPage
+              activeSkillId={activeSkillId}
+              onOpenModelConfig={() => setModelConfigOpen(true)}
+            />
+          )}
+          {activeTab === 'system' && (
+            <SystemPage onOpenModelConfig={() => setModelConfigOpen(true)} />
           )}
         </div>
 
-        {/* Detail panel (togglable) */}
-        {detailOpen && (
-          <div
-            className="flex-shrink-0 border-l border-sidebar-border bg-sidebar animate-fade-in overflow-hidden"
-            style={{ width: 400 }}
-          >
-            <WwWorkbench onClose={() => setDetailOpen(false)} />
+        {/* Intent bar — home has inline chat, skills/system don't need it */}
+        {activeTab !== 'home' && activeTab !== 'skills' && (
+          <div className="flex-shrink-0 border-t">
+            <WwIntent />
+          </div>
+        )}
+
+        {/* Terminal */}
+        {terminalOpen && (
+          <div className="flex-shrink-0 border-t animate-slide-up" style={{ height: 200 }}>
+            <WwTerminal />
           </div>
         )}
       </div>
 
       <WwGateDialog />
       <WwModelConfig open={modelConfigOpen} onClose={() => setModelConfigOpen(false)} />
+
+      {/* Floating action menu */}
+      <WwFloatingMenu
+        onInstall={() => {
+          setActiveTab('skills');
+          window.dispatchEvent(new CustomEvent('floating-install'));
+        }}
+        onToggleConsole={() => setTerminalOpen((v) => !v)}
+        onOpenModelConfig={() => setModelConfigOpen(true)}
+      />
     </div>
   );
 }

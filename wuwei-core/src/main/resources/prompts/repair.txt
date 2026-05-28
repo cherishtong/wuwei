@@ -148,6 +148,8 @@
 ### SYNTAX_ERROR
 - 缺少括号/引号不匹配 → 检查语法
 - 函数体末尾缺少 } → 补全
+- T.AmbientLight(0x) / T.Color(0x) 等缺失 hex 数字 → 补全为有效的 6 位 hex 颜色，如 0xffffff 或 0x404040
+- 0x 后面必须有 6 位十六进制数字（0-9, a-f）
 
 ### LITERAL_STRING_WRAPPER
 - { "text": { "literalString": "hello" } } → { "text": "hello" }

@@ -8,7 +8,7 @@ function RowComponent({ props, buildChild }: { props: Record<string, unknown>; b
   const align = mapAlign(props.align as string);
 
   return (
-    <div className="flex flex-row box-border gap-4" style={{ justifyContent: justify, alignItems: align }}>
+    <div className="flex flex-row box-border gap-4 w-full" style={{ justifyContent: justify, alignItems: align }}>
       {children.map((child: string | { id: string; basePath?: string }, i: number) => {
         if (typeof child === 'string') return <Fragment key={`${child}-${i}`}>{buildChild(child)}</Fragment>;
         if (child && typeof child === 'object' && 'id' in child) return <Fragment key={`${child.id}-${i}`}>{buildChild(child.id, child.basePath)}</Fragment>;

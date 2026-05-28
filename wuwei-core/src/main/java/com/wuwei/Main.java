@@ -24,6 +24,7 @@ import com.wuwei.store.OpLogService;
 import com.wuwei.store.SkillMemoryService;
 import com.wuwei.store.SkillStateStore;
 import com.wuwei.store.StoreService;
+import com.wuwei.store.ConversationService;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -99,23 +100,31 @@ public class Main {
         EcosystemGuardian guardian = new EcosystemGuardian(eventBus);
 
         SnapshotService snapshotService = new SnapshotService(storeService, stateStore, mapper);
+        ConversationService conversationService = new ConversationService(storeService, mapper);
 
         SkillManager skillManager = new SkillManager(
             runtimePool, a2uiEngine, capManager, storeService,
-            stateStore, eventBus, mapper, astAuditor, guardian, snapshotService
+            stateStore, eventBus, mapper, astAuditor, guardian, snapshotService,
+            conversationService
         );
         skillManager.startupLoad();
 
         // ── Set up LLM pipeline ──
         Normalizer normalizer = new Normalizer(mapper);
+
         SkillGenerator skillGenerator = new SkillGenerator(
             agentFactory, memoryService, storeService,
             normalizer, astAuditor, guardian,
             skillManager, snapshotService, eventBus, mapper,
+            conversationService, null,
             loadMaxRepairAttempts(mapper)
         );
 
-        MessageRouter router = new MessageRouter(mapper, eventBus, skillManager, capManager, skillGenerator, agentFactory, storeService);
+        MessageRouter router = new MessageRouter(mapper, eventBus, skillManager, capManager, skillGenerator, agentFactory, storeService, conversationService);
+
+        // Wire the message-update callback: SkillGenerator aggregates steps → push single message
+        skillGenerator.setOnMessageUpdate((threadId, msgRecord) -> router.pushMessageUpdate(threadId, msgRecord));
+        skillManager.setOnConvUpdate(threadId -> router.pushConversationUpdate(threadId));
 
         // ── Start WebSocket server (Helidon picks random port) ─
         WsServer wsServer = new WsServer(0, router, eventBus);

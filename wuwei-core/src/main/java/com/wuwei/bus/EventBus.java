@@ -98,7 +98,7 @@ public class EventBus {
 
     private static String getSkillId(KernelEvent event) {
         return switch (event) {
-            case KernelEvent.A2uiPatch(var skillId, var p) -> skillId;
+            case KernelEvent.A2uiPatch(var skillId, var tid, var p) -> skillId;
             case KernelEvent.EventAck(var skillId, var eid, var st, var lat) -> skillId;
             case KernelEvent.SkillLog(var skillId, var lvl, var msg) -> skillId;
             default -> "__global__";
@@ -151,6 +151,7 @@ public class EventBus {
         try {
             Map<String, Object> map = new LinkedHashMap<>();
             map.put("type", toKebabCase(event.getClass().getSimpleName()));
+            map.put("ns", namespaceOf(event));
 
             for (var rc : event.getClass().getRecordComponents()) {
                 try {
@@ -163,6 +164,29 @@ public class EventBus {
             return mapper.writeValueAsString(map);
         } catch (Exception e) {
             throw new RuntimeException("Event serialization failed", e);
+        }
+    }
+
+    /** Determine which namespace an event belongs to. */
+    public static String namespaceOf(KernelEvent event) {
+        return switch (event) {
+            case KernelEvent.SkillActivated ignored -> "ui";
+            case KernelEvent.A2uiPatch ignored -> "ui";
+            case KernelEvent.SkillDeactivated ignored -> "ui";
+            case KernelEvent.EventAck ignored -> "ui";
+            case KernelEvent.SkillHandoff ignored -> "ui";
+            case KernelEvent.SkillLog ignored -> "log";
+            case KernelEvent.PiLog ignored -> "log";
+            case KernelEvent.RepairAttempt ignored -> "log";
+            case KernelEvent.PlanStep ignored -> "log";
+            default -> "sys";
+        };
+    }
+
+    /** Broadcast a raw JSON string to all connected WebSocket clients. */
+    public void broadcastRaw(String json) {
+        if (wsServer != null) {
+            wsServer.broadcast(json);
         }
     }
 

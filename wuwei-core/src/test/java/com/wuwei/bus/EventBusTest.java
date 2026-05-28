@@ -28,7 +28,7 @@ class EventBusTest {
     void skillActivated_shouldContainUiAndPatches() throws Exception {
         var patches = List.of();
         var ui = mapper.createObjectNode().put("version", "a2ui/1.0");
-        var event = new KernelEvent.SkillActivated("test-skill", ui, patches,
+        var event = new KernelEvent.SkillActivated("test-skill", "测试技能", "thread-1", ui, patches,
             "js", null, java.util.Map.of());
         String json = serialize(event);
         JsonNode node = mapper.readTree(json);
@@ -94,7 +94,7 @@ class EventBusTest {
 
     @Test
     void gateRequest_shouldSerializeReason() throws Exception {
-        var event = new KernelEvent.GateRequest("my-skill", "network", "需要查询API");
+        var event = new KernelEvent.GateRequest("my-skill", "thread-1", "network", "需要查询API");
         String json = serialize(event);
         JsonNode node = mapper.readTree(json);
 
@@ -107,7 +107,7 @@ class EventBusTest {
     @Test
     void planStep_allStatusesShouldWork() throws Exception {
         for (String status : List.of("generating", "done", "error")) {
-            var event = new KernelEvent.PlanStep(status, "test step");
+            var event = new KernelEvent.PlanStep(status, "test step", null);
             String json = serialize(event);
             JsonNode node = mapper.readTree(json);
             assertEquals("plan-step", node.get("type").asText());

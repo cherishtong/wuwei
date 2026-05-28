@@ -23,12 +23,15 @@ public sealed interface KernelEvent permits
     KernelEvent.GuardianWarning,
     KernelEvent.KernelError,
     KernelEvent.CapabilityProxyResult,
+    KernelEvent.SkillHandoff,
     KernelEvent.PiLog
 {
     record KernelReady(String version, int port) implements KernelEvent {}
 
     record SkillActivated(
         String skillId,
+        String skillName,
+        String threadId,
         Object ui,
         List<Object> patches,
         String runtime,
@@ -38,6 +41,7 @@ public sealed interface KernelEvent permits
 
     record A2uiPatch(
         String skillId,
+        String threadId,
         List<Object> patches
     ) implements KernelEvent {}
 
@@ -50,6 +54,7 @@ public sealed interface KernelEvent permits
 
     record GateRequest(
         String skillId,
+        String threadId,
         String capName,
         String reason
     ) implements KernelEvent {}
@@ -74,7 +79,8 @@ public sealed interface KernelEvent permits
 
     record PlanStep(
         String status,
-        String desc
+        String desc,
+        String threadId
     ) implements KernelEvent {}
 
     record RepairAttempt(
@@ -87,7 +93,7 @@ public sealed interface KernelEvent permits
 
     record SkillLoading(String skillId) implements KernelEvent {}
 
-    record SkillDeactivated(String skillId) implements KernelEvent {}
+    record SkillDeactivated(String skillId, String threadId) implements KernelEvent {}
 
     record SystemNotify(String title, String body) implements KernelEvent {}
 
@@ -98,6 +104,13 @@ public sealed interface KernelEvent permits
         String requestId,
         Object result,
         String error
+    ) implements KernelEvent {}
+
+    record SkillHandoff(
+        String fromSkillId,
+        String toSkillId,
+        String threadId,
+        Map<String, Object> context
     ) implements KernelEvent {}
 
     record PiLog(

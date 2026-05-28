@@ -7,6 +7,7 @@ import com.wuwei.capability.CapabilityManager;
 import com.wuwei.llm.AgentFactory;
 import com.wuwei.llm.SkillGenerator;
 import com.wuwei.skill.SkillManager;
+import com.wuwei.store.ConversationService;
 import com.wuwei.store.StoreService;
 import io.helidon.websocket.WsSession;
 import org.slf4j.Logger;
@@ -16,10 +17,12 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.BiConsumer;
 import java.util.stream.Stream;
 
 public class MessageRouter {
@@ -33,11 +36,12 @@ public class MessageRouter {
     private final SkillGenerator skillGenerator;
     private final AgentFactory agentFactory;
     private final StoreService storeService;
+    private final ConversationService conversationService;
 
     public MessageRouter(ObjectMapper mapper, EventBus eventBus,
                          SkillManager skillManager, CapabilityManager capManager,
                          SkillGenerator skillGenerator, AgentFactory agentFactory,
-                         StoreService storeService) {
+                         StoreService storeService, ConversationService conversationService) {
         this.mapper = mapper;
         this.eventBus = eventBus;
         this.skillManager = skillManager;
@@ -45,6 +49,7 @@ public class MessageRouter {
         this.skillGenerator = skillGenerator;
         this.agentFactory = agentFactory;
         this.storeService = storeService;
+        this.conversationService = conversationService;
     }
 
     public EventBus eventBus() {
@@ -80,6 +85,17 @@ public class MessageRouter {
                 case "set-model-routing" -> handleSetModelRouting(session, msg);
                 case "list-model-routing" -> handleListModelRouting(session);
                 case "delete-model-routing" -> handleDeleteModelRouting(session, msg);
+                case "create-conversation" -> handleCreateConversation(session, msg);
+                case "list-conversations" -> handleListConversations(session, msg);
+                case "get-conversation" -> handleGetConversation(session, msg);
+                case "delete-conversation" -> handleDeleteConversation(session, msg);
+                case "get-home-conversation" -> handleGetHomeConversation(session, msg);
+                case "find-or-create-conversation" -> handleFindOrCreateConversation(session, msg);
+                case "set-thread-active-skill" -> handleSetThreadActiveSkill(session, msg);
+                case "get-thread" -> handleGetThread(session, msg);
+                case "update-conversation-title" -> handleUpdateConversationTitle(session, msg);
+                case "skill-handoff" -> handleSkillHandoff(session, msg);
+                case "delete-message" -> handleDeleteMessage(session, msg);
                 default -> sendError(session, "system", "UNKNOWN_TYPE", "Unknown message type: " + type);
             }
         } catch (Exception e) {
@@ -90,49 +106,153 @@ public class MessageRouter {
 
     private void handleUserIntent(WsSession session, JsonNode msg) {
         String text = msg.has("payload") ? msg.get("payload").get("text").asText() : "";
+        String threadId = extractNullableText(msg, "threadId");
         if (text.isBlank()) {
-            eventBus.publish(new KernelEvent.PlanStep("error", "意图描述不能为空"));
+            eventBus.publish(new KernelEvent.PlanStep("error", "意图描述不能为空", threadId));
             return;
         }
-        log.info("user-intent: {}", text);
+        log.info("user-intent: {} threadId={}", text, threadId);
+
+        // Auto-title: extract first ~30 chars of first user message as title
+        Map<String, Object> thread = conversationService.getConversation(threadId);
+        if (thread != null && "新对话".equals(thread.get("title"))) {
+            String autoTitle = text.length() > 30 ? text.substring(0, 30) + "..." : text;
+            conversationService.updateTitle(threadId, autoTitle);
+        }
 
         if (!skillGenerator.enabled()) {
             eventBus.publish(new KernelEvent.PlanStep("error",
-                "LLM 未配置。请设置 OPENAI_API_KEY 环境变量"));
+                "LLM 未配置。请设置 OPENAI_API_KEY 环境变量", threadId));
             return;
         }
 
+        String now = timeStr();
+        if (threadId == null || threadId.isEmpty()) {
+            eventBus.publish(new KernelEvent.PlanStep("error", "threadId 不能为空", null));
+            return;
+        }
+
+        // Write user message to DB, capture its ID
+        String userMsgId = conversationService.addMessageWithId(threadId, "user", text, now, null);
+        String genMsgId = "gen-" + userMsgId;
+
+        // Push user message to frontend
+        pushMessageUpdate(threadId, buildMessageRecord(userMsgId, "user", text, now, null));
+
+        // Push initial generation card (all steps pending)
+        List<Map<String, Object>> initialSteps = List.of(
+            stepMap("generating", "生成技能代码", "pending"),
+            stepMap("normalizing", "规范化输出", "pending"),
+            stepMap("auditing", "安全审计", "pending"),
+            stepMap("repairing", "自动修复", "pending"),
+            stepMap("installing", "安装部署", "pending")
+        );
+        Map<String, Object> genMeta = new LinkedHashMap<>();
+        genMeta.put("type", "generation");
+        genMeta.put("steps", initialSteps);
+        genMeta.put("skillId", null);
+        genMeta.put("allDone", false);
+        pushMessageUpdate(threadId, buildMessageRecord(genMsgId, "assistant", "", now, genMeta));
+
         Map<String, String> modelOverride = extractModelOverride(msg);
 
-        // Run generation in background thread (may take 30-60s)
+        final String tid = threadId;
+        final String gMsgId = genMsgId;
         new Thread(() -> {
-            String resultId = skillGenerator.generate(text, modelOverride);
-            log.info("Generation result: {}", resultId != null ? resultId : "FAILED");
+            try {
+                System.out.println("[kernel] [llm-generate] thread started, calling skillGenerator.generate()");
+                String resultId = skillGenerator.generate(text, modelOverride, tid, gMsgId);
+                System.out.println("[kernel] [llm-generate] resultId=" + (resultId != null ? resultId : "FAILED"));
+                log.info("Generation result: {}", resultId != null ? resultId : "FAILED");
+            } catch (Exception e) {
+                System.out.println("[kernel] [llm-generate] EXCEPTION: " + e.getClass().getName() + ": " + e.getMessage());
+                log.error("Generation thread failed", e);
+                eventBus.publish(new KernelEvent.PlanStep("error", "生成线程异常: " + e.getClass().getSimpleName() + ": " + (e.getMessage() != null ? e.getMessage() : ""), tid));
+                // Update generation card to error so UI doesn't stay stuck
+                List<Map<String, Object>> errorSteps = List.of(
+                    stepMap("generating", "生成技能代码", "error"),
+                    stepMap("normalizing", "规范化输出", "pending"),
+                    stepMap("auditing", "安全审计", "pending"),
+                    stepMap("repairing", "自动修复", "pending"),
+                    stepMap("installing", "安装部署", "pending")
+                );
+                Map<String, Object> errorMeta = new LinkedHashMap<>();
+                errorMeta.put("type", "generation");
+                errorMeta.put("steps", errorSteps);
+                errorMeta.put("skillId", null);
+                errorMeta.put("allDone", false);
+                pushMessageUpdate(tid, buildMessageRecord(gMsgId, "assistant", "", timeStr(), errorMeta));
+            }
         }, "llm-generate").start();
     }
 
     private void handleRefineSkill(WsSession session, JsonNode msg) {
         String skillId = extractText(msg, "skillId");
         String feedback = msg.has("payload") ? msg.get("payload").get("feedback").asText() : "";
+        String threadId = extractNullableText(msg, "threadId");
         if (skillId.equals("unknown") || feedback.isBlank()) {
-            eventBus.publish(new KernelEvent.PlanStep("error", "优化请求缺少 skillId 或 feedback"));
+            eventBus.publish(new KernelEvent.PlanStep("error", "优化请求缺少 skillId 或 feedback", threadId));
             return;
         }
-        log.info("refine-skill: skill={} feedback={}", skillId, feedback);
+        log.info("refine-skill: skill={} feedback={} threadId={}", skillId, feedback, threadId);
 
         if (!skillGenerator.enabled()) {
             eventBus.publish(new KernelEvent.PlanStep("error",
-                "LLM 未配置。请设置 OPENAI_API_KEY 环境变量"));
+                "LLM 未配置。请设置 OPENAI_API_KEY 环境变量", threadId));
             return;
         }
 
         Map<String, String> modelOverride = extractModelOverride(msg);
 
-        // Run refine in background thread (may take 30-60s)
-        new Thread(() -> {
-            String resultId = skillGenerator.refine(skillId, feedback, modelOverride);
-            log.info("Refine result: {}", resultId != null ? resultId : "FAILED");
-        }, "llm-refine").start();
+        // Write user feedback message to DB
+        String now = timeStr();
+        if (threadId != null && !threadId.isEmpty()) {
+            String userMsgId = conversationService.addMessageWithId(threadId, "user", feedback, now, null);
+            String genMsgId = "gen-" + userMsgId;
+
+            // Push user message
+            pushMessageUpdate(threadId, buildMessageRecord(userMsgId, "user", feedback, now, null));
+
+            // Push initial generation card
+            List<Map<String, Object>> initialSteps = List.of(
+                stepMap("generating", "优化技能代码", "pending"),
+                stepMap("normalizing", "规范化输出", "pending"),
+                stepMap("auditing", "安全审计", "pending"),
+                stepMap("repairing", "自动修复", "pending"),
+                stepMap("installing", "安装部署", "pending")
+            );
+            Map<String, Object> genMeta = new LinkedHashMap<>();
+            genMeta.put("type", "generation");
+            genMeta.put("steps", initialSteps);
+            genMeta.put("skillId", null);
+            genMeta.put("allDone", false);
+            pushMessageUpdate(threadId, buildMessageRecord(genMsgId, "assistant", "", now, genMeta));
+
+            final String tid = threadId;
+            final String gMsgId = genMsgId;
+            new Thread(() -> {
+                try {
+                    String resultId = skillGenerator.refine(skillId, feedback, modelOverride, tid, gMsgId);
+                    log.info("Refine result: {}", resultId != null ? resultId : "FAILED");
+                } catch (Exception e) {
+                    log.error("Refine thread failed", e);
+                    eventBus.publish(new KernelEvent.PlanStep("error", "优化线程异常: " + e.getClass().getSimpleName() + ": " + (e.getMessage() != null ? e.getMessage() : ""), tid));
+                    List<Map<String, Object>> errorSteps = List.of(
+                        stepMap("generating", "优化技能代码", "error"),
+                        stepMap("normalizing", "规范化输出", "pending"),
+                        stepMap("auditing", "安全审计", "pending"),
+                        stepMap("repairing", "自动修复", "pending"),
+                        stepMap("installing", "安装部署", "pending")
+                    );
+                    Map<String, Object> errorMeta = new LinkedHashMap<>();
+                    errorMeta.put("type", "generation");
+                    errorMeta.put("steps", errorSteps);
+                    errorMeta.put("skillId", null);
+                    errorMeta.put("allDone", false);
+                    pushMessageUpdate(tid, buildMessageRecord(gMsgId, "assistant", "", timeStr(), errorMeta));
+                }
+            }, "llm-refine").start();
+        }
     }
 
     private void handleEvent(WsSession session, JsonNode msg) {
@@ -228,14 +348,16 @@ public class MessageRouter {
 
     private void handleActivateSkill(WsSession session, JsonNode msg) {
         String skillId = extractText(msg, "skillId");
-        log.info("activate-skill: {}", skillId);
-        skillManager.activate(skillId);
+        String threadId = extractNullableText(msg, "threadId");
+        log.info("activate-skill: {} threadId={}", skillId, threadId);
+        skillManager.activate(skillId, threadId);
     }
 
     private void handleDeactivateSkill(WsSession session, JsonNode msg) {
         String skillId = extractText(msg, "skillId");
-        log.info("deactivate-skill: {}", skillId);
-        skillManager.deactivate(skillId);
+        String threadId = extractNullableText(msg, "threadId");
+        log.info("deactivate-skill: {} threadId={}", skillId, threadId);
+        skillManager.deactivate(skillId, threadId);
     }
 
     private void handleListSkills(WsSession session) {
@@ -405,10 +527,195 @@ public class MessageRouter {
         }
     }
 
+    // ── Conversation persistence ──────────────────────────────────
+
+    private void handleCreateConversation(WsSession session, JsonNode msg) {
+        String skillId = msg.has("skillId") ? msg.get("skillId").asText() : null;
+        String skillName = msg.has("skillName") ? msg.get("skillName").asText() : null;
+        String correlationId = msg.has("correlationId") ? msg.get("correlationId").asText() : null;
+        Map<String, Object> conv = conversationService.createConversation(
+            "".equals(skillId) ? null : skillId,
+            "".equals(skillName) ? null : skillName);
+        sendJson(session, "conversation-created", Map.of("conversation", conv), correlationId);
+    }
+
+    private void handleListConversations(WsSession session, JsonNode msg) {
+        String correlationId = msg.has("correlationId") ? msg.get("correlationId").asText() : null;
+        List<Map<String, Object>> convs = conversationService.listConversations();
+        sendJson(session, "conversation-list", Map.of("conversations", convs), correlationId);
+    }
+
+    private void handleGetConversation(WsSession session, JsonNode msg) {
+        String convId = extractText(msg, "convId");
+        String correlationId = msg.has("correlationId") ? msg.get("correlationId").asText() : null;
+        Map<String, Object> conv = conversationService.getConversation(convId);
+        if (conv == null) {
+            sendError(session, "system", "CONV_NOT_FOUND", "Conversation not found: " + convId);
+            return;
+        }
+        sendJson(session, "conversation-detail", Map.of("conversation", conv), correlationId);
+    }
+
+    private void handleDeleteConversation(WsSession session, JsonNode msg) {
+        String convId = extractText(msg, "convId");
+        String correlationId = msg.has("correlationId") ? msg.get("correlationId").asText() : null;
+        conversationService.deleteConversation(convId);
+        sendJson(session, "conversation-deleted", Map.of("convId", convId), correlationId);
+    }
+
+    private void handleGetHomeConversation(WsSession session, JsonNode msg) {
+        String correlationId = msg.has("correlationId") ? msg.get("correlationId").asText() : null;
+        Map<String, Object> conv = conversationService.getHomeConversation();
+        sendJson(session, "home-conversation", Map.of("conversation", conv), correlationId);
+    }
+
+    private void handleFindOrCreateConversation(WsSession session, JsonNode msg) {
+        String skillId = msg.has("skillId") && !msg.get("skillId").asText().isEmpty()
+            ? msg.get("skillId").asText() : null;
+        String skillName = msg.has("skillName") ? msg.get("skillName").asText() : null;
+        String correlationId = msg.has("correlationId") ? msg.get("correlationId").asText() : null;
+        Map<String, Object> conv = conversationService.findOrCreateConversation(skillId, skillName);
+        sendJson(session, "conversation-ready", Map.of("conversation", conv), correlationId);
+    }
+
+    private void handleSetThreadActiveSkill(WsSession session, JsonNode msg) {
+        String convId = extractText(msg, "convId");
+        String skillId = msg.has("skillId") && !msg.get("skillId").asText().isEmpty()
+            ? msg.get("skillId").asText() : null;
+        String correlationId = msg.has("correlationId") ? msg.get("correlationId").asText() : null;
+        conversationService.setActiveSkill(convId, skillId);
+        sendJson(session, "thread-active-skill-set",
+            Map.of("convId", convId, "skillId", skillId != null ? skillId : ""), correlationId);
+    }
+
+    private void handleUpdateConversationTitle(WsSession session, JsonNode msg) {
+        String convId = extractText(msg, "convId");
+        String title = extractText(msg, "title");
+        String correlationId = msg.has("correlationId") ? msg.get("correlationId").asText() : null;
+        if (title == null || title.isBlank()) return;
+        conversationService.updateTitle(convId, title.trim());
+        sendJson(session, "conversation-title-updated", Map.of("convId", convId, "title", title.trim()), correlationId);
+    }
+
+    private void handleGetThread(WsSession session, JsonNode msg) {
+        String convId = extractText(msg, "convId");
+        String correlationId = msg.has("correlationId") ? msg.get("correlationId").asText() : null;
+        Map<String, Object> conv = conversationService.getConversation(convId);
+        if (conv == null) {
+            sendError(session, "system", "THREAD_NOT_FOUND", "Thread not found: " + convId);
+            return;
+        }
+        sendJson(session, "thread-detail", Map.of("thread", conv), correlationId);
+    }
+
+    private void handleSkillHandoff(WsSession session, JsonNode msg) {
+        String fromSkillId = extractText(msg, "fromSkillId");
+        String toSkillId = extractText(msg, "toSkillId");
+        String threadId = extractNullableText(msg, "threadId");
+        Map<String, Object> context = extractMap(msg, "context");
+        log.info("skill-handoff: {} -> {} (thread={})", fromSkillId, toSkillId, threadId);
+        skillManager.handoff(fromSkillId, toSkillId, threadId, context);
+    }
+
+    /** Push the full message list for a thread to all connected clients. */
+    public void pushConversationUpdate(String threadId) {
+        if (threadId == null || threadId.isEmpty()) return;
+        List<Map<String, Object>> messages = conversationService.getMessages(threadId);
+        try {
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("ns", "conv");
+            payload.put("type", "conversation-update");
+            payload.put("threadId", threadId);
+            payload.put("messages", messages);
+            String json = mapper.writeValueAsString(payload);
+            eventBus.broadcastRaw(json);
+        } catch (Exception e) {
+            log.warn("Failed to push conversation-update: {}", e.getMessage());
+        }
+    }
+
+    /** Push a single message insert/update to all connected clients and persist to DB. */
+    public void pushMessageUpdate(String threadId, Map<String, Object> message) {
+        if (threadId == null || threadId.isEmpty()) return;
+        // Persist to DB
+        String id = (String) message.get("id");
+        String role = (String) message.get("role");
+        String content = (String) message.getOrDefault("content", "");
+        String time = (String) message.getOrDefault("time", "");
+        Map<String, Object> meta = extractMeta(message);
+        conversationService.upsertMessage(threadId, id, role, content, time, meta);
+
+        // Broadcast to frontend
+        try {
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("ns", "conv");
+            payload.put("type", "message-updated");
+            payload.put("threadId", threadId);
+            payload.put("message", message);
+            String json = mapper.writeValueAsString(payload);
+            eventBus.broadcastRaw(json);
+        } catch (Exception e) {
+            log.warn("Failed to push message-updated: {}", e.getMessage());
+        }
+    }
+
+    /** Extract meta fields from a message record (everything except id/role/content/time). */
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> extractMeta(Map<String, Object> message) {
+        Map<String, Object> meta = new LinkedHashMap<>();
+        for (var entry : message.entrySet()) {
+            String key = entry.getKey();
+            if (!key.equals("id") && !key.equals("role") && !key.equals("content") && !key.equals("time")) {
+                meta.put(key, entry.getValue());
+            }
+        }
+        return meta.isEmpty() ? null : meta;
+    }
+
+    /** Build a message record map for pushMessageUpdate. */
+    public Map<String, Object> buildMessageRecord(String id, String role, String content,
+                                                   String time, Map<String, Object> meta) {
+        Map<String, Object> rec = new LinkedHashMap<>();
+        rec.put("id", id);
+        rec.put("role", role);
+        rec.put("content", content);
+        rec.put("time", time);
+        if (meta != null) {
+            rec.putAll(meta);
+        }
+        return rec;
+    }
+
+    private Map<String, Object> stepMap(String key, String label, String status) {
+        Map<String, Object> s = new LinkedHashMap<>();
+        s.put("key", key);
+        s.put("label", label);
+        s.put("status", status);
+        return s;
+    }
+
+    private void handleDeleteMessage(WsSession session, JsonNode msg) {
+        String threadId = extractNullableText(msg, "threadId");
+        String messageId = extractText(msg, "messageId");
+        if (threadId == null || threadId.isEmpty() || messageId.equals("unknown")) {
+            sendError(session, "system", "INVALID_REQUEST", "delete-message requires threadId and messageId");
+            return;
+        }
+        log.info("delete-message: thread={} msg={}", threadId, messageId);
+        conversationService.deleteMessage(threadId, messageId);
+        pushConversationUpdate(threadId);
+    }
+
     // ── helpers ──────────────────────────────────────────────────
 
     private String extractText(JsonNode node, String field) {
         return node.has(field) ? node.get(field).asText() : "unknown";
+    }
+
+    /** Like extractText but returns null when the JSON value is null or missing. */
+    private String extractNullableText(JsonNode node, String field) {
+        if (!node.has(field) || node.get(field).isNull()) return null;
+        return node.get(field).asText();
     }
 
     @SuppressWarnings("unchecked")
@@ -433,8 +740,27 @@ public class MessageRouter {
         }
     }
 
+
+    private void sendJson(WsSession session, String type, Map<String, Object> data, String correlationId) {
+        try {
+            Map<String, Object> payload = new LinkedHashMap<>(data);
+            payload.put("ns", "conv");
+            payload.put("type", type);
+            if (correlationId != null) {
+                payload.put("correlationId", correlationId);
+            }
+            session.send(mapper.writeValueAsString(payload), true);
+        } catch (Exception e) {
+            log.warn("Failed to send {}: {}", type, e.getMessage());
+        }
+    }
+
     private void sendError(WsSession session, String skillId, String code, String message) {
         eventBus.publish(new KernelEvent.KernelError(skillId, code, message));
+    }
+
+    private String timeStr() {
+        return java.time.LocalTime.now().format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"));
     }
 
     /** Extract optional model override from the WebSocket payload. */

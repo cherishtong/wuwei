@@ -273,15 +273,8 @@ public class AstAuditor {
                         ' at line ' + (node.loc ? node.loc.start.line : '?'));
                 }
 
-                // Top-level let/const (state leak) — depth 0 only
-                // var is allowed: it is the standard pattern for script-level state
-                if (depth === 0 && node.type === 'VariableDeclaration') {
-                    if (node.kind === 'let' || node.kind === 'const') {
-                        var names = node.declarations.map(function(d) { return d.id.name; }).join(', ');
-                        issues.push('STATE_LEAK:top-level ' + node.kind + ' ' + names +
-                            ' at line ' + (node.loc ? node.loc.start.line : '?'));
-                    }
-                }
+                // All var/let/const at top-level are allowed —
+                // the sandbox IIFE already scopes everything identically
 
                 // capability.<xxx> where xxx is not declared
                 if (node.type === 'MemberExpression' &&

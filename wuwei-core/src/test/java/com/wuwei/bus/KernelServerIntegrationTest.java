@@ -16,6 +16,7 @@ import com.wuwei.skill.SkillManager;
 import com.wuwei.snapshot.SnapshotService;
 import com.wuwei.store.OpLogService;
 import com.wuwei.store.SkillMemoryService;
+import com.wuwei.store.ConversationService;
 import com.wuwei.store.SkillStateStore;
 import com.wuwei.store.StoreService;
 import org.junit.jupiter.api.AfterEach;
@@ -61,9 +62,11 @@ class KernelServerIntegrationTest {
         AstAuditor astAuditor = new AstAuditor(mapper);
         EcosystemGuardian guardian = new EcosystemGuardian(eventBus);
         SnapshotService snapshotService = new SnapshotService(storeService, stateStore, mapper);
+        ConversationService conversationService = new ConversationService(storeService, mapper);
         SkillManager skillManager = new SkillManager(
             runtimePool, a2uiEngine, capManager, storeService,
-            stateStore, eventBus, mapper, astAuditor, guardian, snapshotService
+            stateStore, eventBus, mapper, astAuditor, guardian, snapshotService,
+            conversationService
         );
         skillManager.startupLoad();
         Normalizer normalizer = new Normalizer(mapper);
@@ -71,9 +74,10 @@ class KernelServerIntegrationTest {
             null, memoryService, storeService,
             normalizer, astAuditor, guardian,
             skillManager, snapshotService, eventBus, mapper,
+            conversationService, null,
             2
         );
-        MessageRouter router = new MessageRouter(mapper, eventBus, skillManager, capManager, skillGenerator, null, storeService);
+        MessageRouter router = new MessageRouter(mapper, eventBus, skillManager, capManager, skillGenerator, null, storeService, conversationService);
 
         // Start WsServer on random port
         wsServer = new WsServer(0, router, eventBus);

@@ -189,14 +189,14 @@ function CanvasComponent({ props, context }: {
         width: '100%',
         borderRadius: '0.375rem',
         border: '1px solid hsl(var(--border))',
-        backgroundColor: '#fff',
+        backgroundColor: 'hsl(var(--background))',
         overflow: 'hidden',
       }
     : {
         display: 'inline-block',
         borderRadius: '0.375rem',
         border: '1px solid hsl(var(--border))',
-        backgroundColor: '#fff',
+        backgroundColor: 'hsl(var(--background))',
         width: `${fixedWidth}px`,
         height: `${fixedHeight}px`,
       };

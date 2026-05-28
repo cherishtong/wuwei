@@ -278,26 +278,46 @@ public class StoreService {
         }
     }
 
-    /** Seed default model routing rows if table is empty. Called once at startup. */
+    /** Seed / refresh default model routing from wuwei.json at startup. */
     public void seedDefaultRouting(Map<String, String> llmConfig) {
         try {
-            // Check if table already has rows
-            try (Statement stmt = getConn().createStatement();
-                 ResultSet rs = stmt.executeQuery("SELECT COUNT(*) FROM model_routing")) {
-                if (rs.next() && rs.getInt(1) > 0) return;
-            }
-
             String provider = llmConfig.getOrDefault("provider", "deepseek");
             String model = llmConfig.getOrDefault("model", "deepseek-chat");
             String apiUrl = llmConfig.getOrDefault("apiUrl", "");
             String apiKey = llmConfig.getOrDefault("apiKey", "");
             String params = llmConfig.getOrDefault("params", "{}");
 
+            // Only update rows that still have no api_key set (schema.sql defaults).
+            // This preserves user-configured overrides while fixing fresh-DB setups.
+            try (PreparedStatement ps = getConn().prepareStatement(
+                    "UPDATE model_routing SET provider=?, model=?, api_url=?, api_key=?, params=?, updated_at=strftime('%s','now') "
+                    + "WHERE api_key='' OR api_key IS NULL")) {
+                ps.setString(1, provider);
+                ps.setString(2, model);
+                ps.setString(3, apiUrl);
+                ps.setString(4, apiKey);
+                ps.setString(5, params);
+                int updated = ps.executeUpdate();
+                if (updated > 0) {
+                    log.info("Updated {} model_routing rows with config from wuwei.json", updated);
+                }
+            }
+
+            // If nothing needed updating (all have api_key), insert any missing task types
             String[] taskTypes = {"skill/generate", "skill/repair", "ai/ask", "skill/drift"};
             for (String tt : taskTypes) {
-                updateModelRouting(tt, provider, model, apiUrl, apiKey, params);
+                try (PreparedStatement ps = getConn().prepareStatement(
+                        "INSERT OR IGNORE INTO model_routing(task_type, provider, model, api_url, api_key, params, updated_at) "
+                        + "VALUES(?, ?, ?, ?, ?, ?, strftime('%s','now'))")) {
+                    ps.setString(1, tt);
+                    ps.setString(2, provider);
+                    ps.setString(3, model);
+                    ps.setString(4, apiUrl);
+                    ps.setString(5, apiKey);
+                    ps.setString(6, params);
+                    ps.executeUpdate();
+                }
             }
-            log.info("Seeded default model routing: {}/{}", provider, model);
         } catch (Exception e) {
             log.warn("seedDefaultRouting failed: {}", e.getMessage());
         }

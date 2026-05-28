@@ -160,12 +160,32 @@ const THREENS = {
     return wrap(new THREE.BufferGeometry());
   },
 
-  // Constants
-  Color: THREE.Color,
-  BufferAttribute: THREE.BufferAttribute,
-  Vector3: THREE.Vector3,
-  Shape: THREE.Shape,
-  ExtrudeGeometry: THREE.ExtrudeGeometry,
+  // Factory-wrapped constructors (callable without `new`)
+  Color(r: number | string) {
+    return wrap(new THREE.Color(r));
+  },
+  BufferAttribute(array: ArrayLike<number>, itemSize: number) {
+    return wrap(new THREE.BufferAttribute(array as Float32Array, itemSize));
+  },
+  Vector3(x: number, y: number, z: number) {
+    return wrap(new THREE.Vector3(x, y, z));
+  },
+  Quaternion() {
+    return wrap(new THREE.Quaternion());
+  },
+  Shape(points?: ArrayLike<{x:number,y:number}>) {
+    const s = new THREE.Shape();
+    if (points) {
+      for (let i = 0; i < points.length; i++) {
+        if (i === 0) s.moveTo(points[i].x, points[i].y);
+        else s.lineTo(points[i].x, points[i].y);
+      }
+    }
+    return wrap(s);
+  },
+  ExtrudeGeometry(shape: object, options: Record<string, unknown>) {
+    return wrap(new THREE.ExtrudeGeometry(unwrap(shape) as THREE.Shape, options));
+  },
   MathUtils: THREE.MathUtils,
   DoubleSide: THREE.DoubleSide,
   PCFSoftShadowMap: THREE.PCFSoftShadowMap,
@@ -205,7 +225,7 @@ function createScene(
   renderer.toneMappingExposure = 1.2;
 
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0xf0ebe3);
+  scene.background = null;
 
   const aspect = canvas.clientWidth / Math.max(canvas.clientHeight, 1);
   const camera = new THREE.PerspectiveCamera(50, aspect, 0.1, 1000);
@@ -259,6 +279,9 @@ function createScene(
     (camera as THREE.PerspectiveCamera).aspect = w / Math.max(h, 1);
     (camera as THREE.PerspectiveCamera).updateProjectionMatrix();
   };
+
+  controls.update();
+  renderer.render(scene, camera);
 
   const origDispose = sceneObj.dispose;
   sceneObj.dispose = () => {
