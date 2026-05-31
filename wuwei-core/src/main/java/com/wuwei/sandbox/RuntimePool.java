@@ -5,6 +5,7 @@ import com.wuwei.skill.SkillManifest;
 import org.graalvm.polyglot.Engine;
 
 import java.util.List;
+import java.util.Map;
 import java.util.function.Consumer;
 
 /**
@@ -56,7 +57,18 @@ public class RuntimePool {
     public SkillRuntime create(SkillManifest manifest, String code,
                                 CapabilitySet capSet,
                                 Consumer<List<Object>> patchFlush) {
-        return new SkillRuntime(getSharedEngine(), manifest, code, capSet, patchFlush);
+        return new SkillRuntime(getSharedEngine(), manifest, code, capSet, patchFlush, null);
+    }
+
+    /**
+     * Create a SkillRuntime with multi-file module support.
+     * moduleFiles maps relative paths (e.g. "lib/helpers.js") to JS source.
+     */
+    public SkillRuntime create(SkillManifest manifest, String code,
+                                CapabilitySet capSet,
+                                Consumer<List<Object>> patchFlush,
+                                Map<String, String> moduleFiles) {
+        return new SkillRuntime(getSharedEngine(), manifest, code, capSet, patchFlush, moduleFiles);
     }
 
     /**

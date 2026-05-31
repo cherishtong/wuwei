@@ -5,8 +5,11 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.wuwei.a2ui.A2uiEngine;
 import com.wuwei.capability.AiCapability;
 import com.wuwei.capability.CapabilityManager;
+import com.wuwei.capability.CryptoCapability;
+import com.wuwei.capability.DatabaseCapability;
 import com.wuwei.capability.FileCapability;
 import com.wuwei.capability.NetworkCapability;
+import com.wuwei.capability.WebSearchCapability;
 import com.wuwei.gate.AstAuditor;
 import com.wuwei.gate.EcosystemGuardian;
 import com.wuwei.llm.Normalizer;
@@ -57,7 +60,11 @@ class KernelServerIntegrationTest {
         FileCapability fileCap = new FileCapability();
         SkillStateStore stateStore = new SkillStateStore();
         AiCapability aiCap = new AiCapability(null, storeService);
-        CapabilityManager capManager = new CapabilityManager(stateStore, networkCap, fileCap, aiCap, eventBus);
+        CryptoCapability cryptoCap = new CryptoCapability();
+        DatabaseCapability databaseCap = new DatabaseCapability();
+        WebSearchCapability webSearchCap = new WebSearchCapability(storeService, mapper);
+        CapabilityManager capManager = new CapabilityManager(stateStore, networkCap, fileCap,
+            aiCap, cryptoCap, databaseCap, webSearchCap, eventBus);
         RuntimePool runtimePool = new RuntimePool();
         AstAuditor astAuditor = new AstAuditor(mapper);
         EcosystemGuardian guardian = new EcosystemGuardian(eventBus);

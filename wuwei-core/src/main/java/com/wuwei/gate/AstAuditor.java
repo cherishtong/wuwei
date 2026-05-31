@@ -77,14 +77,38 @@ public class AstAuditor {
         // Phase 1: Manifest validation
         validateManifest(manifest);
 
-        // Phase 2: ID contract — handlers.js must only reference UI IDs that exist
+        // Phase 2: ID contract — check all JS files against the UI ID set
         Set<String> uiIds = extractUiIds(genome.uiJson());
-        checkIdContract(genome.handlersJs(), uiIds, manifest.id());
+        List<String> allIssues = new ArrayList<>();
 
-        // Phase 3: AST security scan
-        List<String> issues = scanAst(genome.handlersJs(), manifest);
-        if (!issues.isEmpty()) {
-            String detail = String.join("; ", issues);
+        // Check main handlers.js (entry point)
+        if (genome.handlersJs() != null && !genome.handlersJs().isBlank()) {
+            checkIdContract(genome.handlersJs(), uiIds, manifest.id());
+
+            // Phase 3: AST security scan on main entry
+            List<String> issues = scanAst(genome.handlersJs(), manifest);
+            if (!issues.isEmpty()) {
+                allIssues.addAll(issues);
+            }
+        }
+
+        // Check each module file in multi-file mode
+        if (genome.moduleFiles() != null && !genome.moduleFiles().isEmpty()) {
+            for (var entry : genome.moduleFiles().entrySet()) {
+                String filePath = entry.getKey();
+                String source = entry.getValue();
+                if (source == null || source.isBlank()) continue;
+
+                checkIdContract(source, uiIds, manifest.id());
+                List<String> issues = scanAst(source, manifest);
+                for (String issue : issues) {
+                    allIssues.add(filePath + " — " + issue);
+                }
+            }
+        }
+
+        if (!allIssues.isEmpty()) {
+            String detail = String.join("; ", allIssues);
             throw new GateException("AST_VIOLATION", detail);
         }
     }
@@ -282,8 +306,10 @@ public class AstAuditor {
                     node.object.name === 'capability' &&
                     node.property.type === 'Identifier') {
                     var capName = node.property.name;
-                    // ui and permission are always available
+                    // ui, permission, crypto, db, websearch are always available
                     if (capName !== 'ui' && capName !== 'permission' &&
+                        capName !== 'crypto' && capName !== 'db' &&
+                        capName !== 'websearch' &&
                         declared.indexOf(capName) === -1) {
                         issues.push('CAPABILITY_ESCAPE:using undeclared capability.' + capName +
                             ' at line ' + (node.loc ? node.loc.start.line : '?'));

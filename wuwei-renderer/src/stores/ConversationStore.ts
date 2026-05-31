@@ -17,8 +17,11 @@ export interface ChatMessage {
   // generation card (aggregated by kernel, sent as single updatable message)
   msgType?: string;     // "generation"
   steps?: import('../components/useWuweiRuntime').StepState[];
+  log?: { time: string; action: string; path: string; detail?: string }[];
   skillId?: string | null;
   allDone?: boolean;
+  error?: string | null;
+  fileProgress?: string[];
 }
 
 export interface Conversation {
@@ -68,8 +71,12 @@ function normalizeMessage(m: any): ChatMessage {
     // Generation card fields (from meta JSON spread by kernel)
     msgType: m.type as string | undefined,
     steps: m.steps as ChatMessage['steps'],
+    log: m.log as ChatMessage['log'],
     skillId: m.skillId as string | null | undefined,
     allDone: m.allDone as boolean | undefined,
+    error: m.error as string | null | undefined,
+    allDone: m.allDone as boolean | undefined,
+    fileProgress: m.fileProgress as string[] | undefined,
   };
 }
 

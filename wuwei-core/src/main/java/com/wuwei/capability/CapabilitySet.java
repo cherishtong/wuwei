@@ -40,6 +40,9 @@ public class CapabilitySet {
     private final NetworkCapability networkCap;
     private final FileCapability fileCap;
     private final AiCapability aiCap;
+    private final CryptoCapability cryptoCap;
+    private final DatabaseCapability databaseCap;
+    private final WebSearchCapability webSearchCap;
     private final EventBus eventBus;
     private final CapabilityManager capManager;
     private final SkillManifest manifest;
@@ -47,6 +50,8 @@ public class CapabilitySet {
     private CapabilitySet(String skillId, SkillStateStore store,
                           NetworkCapability networkCap, FileCapability fileCap,
                           AiCapability aiCap,
+                          CryptoCapability cryptoCap, DatabaseCapability databaseCap,
+                          WebSearchCapability webSearchCap,
                           EventBus eventBus, CapabilityManager capManager,
                           SkillManifest manifest) {
         this.skillId = skillId;
@@ -54,6 +59,9 @@ public class CapabilitySet {
         this.networkCap = networkCap;
         this.fileCap = fileCap;
         this.aiCap = aiCap;
+        this.cryptoCap = cryptoCap;
+        this.databaseCap = databaseCap;
+        this.webSearchCap = webSearchCap;
         this.eventBus = eventBus;
         this.capManager = capManager;
         this.manifest = manifest;
@@ -63,10 +71,14 @@ public class CapabilitySet {
                                        NetworkCapability networkCap,
                                        FileCapability fileCap,
                                        AiCapability aiCap,
+                                       CryptoCapability cryptoCap,
+                                       DatabaseCapability databaseCap,
+                                       WebSearchCapability webSearchCap,
                                        EventBus eventBus,
                                        CapabilityManager capManager) {
         String skillId = manifest.id();
-        CapabilitySet set = new CapabilitySet(skillId, store, networkCap, fileCap, aiCap, eventBus, capManager, manifest);
+        CapabilitySet set = new CapabilitySet(skillId, store, networkCap, fileCap, aiCap,
+            cryptoCap, databaseCap, webSearchCap, eventBus, capManager, manifest);
 
         // ── storage capability ──────────────────────────────────
         if (manifest.hasCapability("storage")) {
@@ -92,6 +104,21 @@ public class CapabilitySet {
         // ── file capability ─────────────────────────────────────
         if (manifest.hasCapability("file")) {
             set.caps.put("file", fileCap.forSkill(manifest));
+        }
+
+        // ── crypto capability ──────────────────────────────────
+        if (manifest.hasCapability("crypto")) {
+            set.caps.put("crypto", cryptoCap.forSkill(skillId));
+        }
+
+        // ── database capability ────────────────────────────────
+        if (manifest.hasCapability("database")) {
+            set.caps.put("db", databaseCap.forSkill(skillId));
+        }
+
+        // ── websearch capability ───────────────────────────────
+        if (manifest.hasCapability("websearch")) {
+            set.caps.put("websearch", webSearchCap.forSkill(skillId));
         }
 
         // ── os capability ───────────────────────────────────────
@@ -121,6 +148,9 @@ public class CapabilitySet {
             case "file" -> fileCap.forSkill(manifest);
             case "os" -> buildOs();
             case "ai" -> aiCap.forSkill(skillId);
+            case "crypto" -> cryptoCap.forSkill(skillId);
+            case "database", "db" -> databaseCap.forSkill(skillId);
+            case "websearch" -> webSearchCap.forSkill(skillId);
             default -> { log.warn("Unknown capability: {}", capName); yield null; }
         };
         if (impl != null) {

@@ -2,6 +2,11 @@ package com.wuwei.llm;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.langchain4j.data.message.SystemMessage;
+import dev.langchain4j.data.message.UserMessage;
+import dev.langchain4j.model.chat.ChatModel;
+import dev.langchain4j.model.chat.request.ChatRequest;
+import dev.langchain4j.model.chat.response.ChatResponse;
 import com.wuwei.bus.EventBus;
 import com.wuwei.bus.event.KernelEvent;
 import com.wuwei.gate.AstAuditor;
@@ -14,8 +19,6 @@ import com.wuwei.snapshot.SnapshotService;
 import com.wuwei.store.ConversationService;
 import com.wuwei.store.SkillMemoryService;
 import com.wuwei.store.StoreService;
-import dev.langchain4j.model.chat.response.ChatResponse;
-import dev.langchain4j.service.TokenStream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -175,8 +178,6 @@ public class SkillGenerator {
                                    Map<String, String> currentFiles,
                                    String threadId, String genMsgId) {
 
-        SkillGenerateAgent agent = agentFactory.createGenerateAgent(skillId, modelOverride);
-        System.out.println("[kernel] [generate] agent created, skillId=" + skillId);
         Map<String, String> routing = storeService.getModelRouting("skill/generate");
         String modelDesc = modelOverride != null && modelOverride.containsKey("model")
             ? modelOverride.get("model")
@@ -190,50 +191,123 @@ public class SkillGenerator {
             List.of(existingSummary.split("\n")), memoryCtx, currentFiles);
 
         try {
-            StringBuilder acc = new StringBuilder();
-            CompletableFuture<String> done = new CompletableFuture<>();
+            Path workDir = Paths.get(skillsBaseDir, skillId + "-gen");
+            SkillFileTools tools = new SkillFileTools(workDir, mapper, astAuditor);
+            if (Files.exists(workDir)) {
+                try (var walk = Files.walk(workDir)) {
+                    walk.sorted(Comparator.reverseOrder())
+                        .forEach(p -> { try { Files.delete(p); } catch (Exception ignored) {} });
+                }
+            }
+            Files.createDirectories(workDir);
 
-            System.out.println("[kernel] [generate] calling agent.generate()...");
-            log.info("Starting LLM generate call (model={})", modelDesc);
-            TokenStream stream = agent.generate(userMessage, skillId);
-            System.out.println("[kernel] [generate] TokenStream obtained, registering callbacks");
-            log.info("TokenStream obtained, registering callbacks");
+            // Seed docs/ directory from classpath resources
+            seedDocs(workDir);
 
-            var handlersSectionReached = new java.util.concurrent.atomic.AtomicBoolean(false);
-            stream
-                .onPartialResponse(partial -> {
-                    acc.append(partial);
-                    if (!handlersSectionReached.get()
-                        && acc.toString().contains("=== handlers.js ===")) {
-                        handlersSectionReached.set(true);
-                        stepUpdate(threadId, genMsgId, "generating", "生成技能代码", "in_progress", "正在生成处理逻辑...");
+            // Create memory/ directory for agent working notes
+            Path memoryDir = workDir.resolve("memory");
+            Files.createDirectories(memoryDir);
+
+            // Wire up file change notifications for frontend streaming log
+            tools.setOnFileChange((action, path) -> {
+                genLog(threadId, genMsgId, action, path, null);
+                pushGenerationCard(threadId, genMsgId, null, false, null);
+            });
+
+            String provider = routing.getOrDefault("provider", "");
+
+            // ── Phase 1: PLAN ──
+            genLog(threadId, genMsgId, "plan", "", "分析需求，制定计划...");
+            PlannerAgent planner = agentFactory.createPlannerAgent(modelOverride);
+            System.out.println("[kernel] [generate] Planner starting, provider=" + provider);
+            stepUpdate(threadId, genMsgId, "generating", "生成技能代码", "in_progress", "制定计划中...");
+
+            String planText = planner.plan(userMessage);
+            System.out.println("[kernel] [generate] Plan: " + planText);
+            Plan plan = parsePlan(planText);
+            if (plan == null) {
+                stepUpdate(threadId, genMsgId, "generating", "生成技能代码", "error", "计划解析失败");
+                return null;
+            }
+            genLog(threadId, genMsgId, "plan", "", "计划: " + plan.files().size() + " 个文件");
+
+            // ── Phase 2: EXECUTE ──
+            // Create sandbox database for SQL seed steps
+            Path seedDb = workDir.resolve("seed.db");
+            java.sql.Connection seedConn = java.sql.DriverManager.getConnection("jdbc:sqlite:" + seedDb.toString());
+            seedConn.createStatement().execute("PRAGMA journal_mode=WAL");
+
+            ChatModel chatModel = agentFactory.createChatModel(modelOverride);
+            for (Plan.FileSpec file : plan.files()) {
+                genLog(threadId, genMsgId, "exec", file.path(), file.purpose());
+                stepUpdate(threadId, genMsgId, "generating", "生成技能代码", "in_progress",
+                    "生成 " + file.path());
+
+                if (file.path().startsWith("sql:")) {
+                    // ── SQL seed: execute directly against sandbox DB ──
+                    String dbPrompt = buildDbSeedPrompt(file, plan, intent);
+                    ChatResponse resp = chatModel.chat(ChatRequest.builder()
+                        .messages(SystemMessage.from(dbPrompt), UserMessage.from("输出SQL，每条以;结尾，不要解释"))
+                        .build());
+                    String sql = resp.aiMessage().text();
+                    if (sql != null && !sql.isBlank()) {
+                        sql = stripMarkdownFences(sql);
+                        int count = 0;
+                        for (String stmt : sql.split(";")) {
+                            stmt = stmt.trim();
+                            if (!stmt.isEmpty() && !stmt.startsWith("--")) {
+                                try { seedConn.createStatement().execute(stmt); count++; } catch (Exception e) {
+                                    System.out.println("[kernel] [generate] SQL skip: " + e.getMessage());
+                                }
+                            }
+                        }
+                        genLog(threadId, genMsgId, "sql", "", count + " 条SQL已执行");
                     }
-                })
-                .onCompleteResponse((ChatResponse response) -> {
-                    String text = response.aiMessage() != null ? response.aiMessage().text() : "";
-                    done.complete(text != null ? text : "");
-                })
-                .onError(done::completeExceptionally)
-                .start();
-            System.out.println("[kernel] [generate] Stream.start() called, waiting for completion...");
-            log.info("Stream started, waiting for completion");
+                } else {
+                    // ── File generation: any path, any format ──
+                    String filePrompt = buildFilePrompt(file, plan, intent);
+                    ChatResponse resp = chatModel.chat(ChatRequest.builder()
+                        .messages(SystemMessage.from(filePrompt), UserMessage.from("输出 " + file.path() + " 的内容"))
+                        .build());
+                    String content = resp.aiMessage().text();
+                    if (content != null && !content.isBlank()) {
+                        content = stripMarkdownFences(content);
+                        tools.createFile(file.path(), content);
+                    } else {
+                        System.out.println("[kernel] [generate] WARNING: empty response for " + file.path());
+                    }
+                }
+            }
+            seedConn.close();
 
-            String raw = done.get(360, TimeUnit.SECONDS);
-            System.out.println("[kernel] [generate] LLM response received, length=" + raw.length());
+            // Read files from working directory
+            Map<String, String> allFiles = tools.readAllFiles();
+            SkillFiles files = buildSkillFiles(allFiles, skillId);
 
-            String preview = raw.length() > 600 ? raw.substring(0, 600) + "..." : raw;
-            log.info("LLM raw response preview ({} chars total):\n{}", raw.length(), preview);
-
-            SkillFiles files = OutputParser.parseThreeFiles(raw);
-
-            String designDecision = OutputParser.extractDesignDecision(raw);
-
+            files = ensureRequiredFiles(files, skillId, intent);
             stepUpdate(threadId, genMsgId, "generating", "生成技能代码", "done", "生成完成");
-            return auditAndInstall(normalizer.normalize(files), skillId, modelOverride,
+
+            // Extract agent's working notes for design decision recording
+            String designDecision = null;
+            try {
+                Path notesPath = workDir.resolve("memory").resolve("notes.md");
+                if (Files.exists(notesPath)) {
+                    designDecision = Files.readString(notesPath);
+                }
+            } catch (Exception ignored) {}
+
+            String resultId = auditAndInstall(normalizer.normalize(files), skillId, modelOverride,
                 intent, "Initial Design", designDecision, threadId, genMsgId);
+
+            // Copy seed data from staging to installed skill
+            if (resultId != null) {
+                copySeedData(workDir, Paths.get(skillsBaseDir, resultId));
+            }
+            return resultId;
 
         } catch (Exception e) {
             System.out.println("[kernel] [generate] EXCEPTION: " + e.getClass().getName() + ": " + (e.getMessage() != null ? e.getMessage() : "(null)"));
+            e.printStackTrace(System.out);
             log.error("LLM generation failed", e);
             String msg = e.getMessage();
             if (msg == null || msg.isBlank()) {
@@ -244,6 +318,12 @@ public class SkillGenerator {
             eventBus.publish(new KernelEvent.PlanStep("error", "LLM 生成失败: " + msg, threadId));
             stepUpdate(threadId, genMsgId, "generating", "生成技能代码", "error", "LLM 调用失败: " + msg);
             return null;
+        } finally {
+            // Clean up gen staging directory — prevents stale dirs from overwriting
+            // real skill A2UI trees on next startup (they share the manifest id).
+            Path stagingDir = Paths.get(skillsBaseDir, skillId + "-gen");
+            cleanupDir(stagingDir);
+            System.out.println("[kernel] [generate] Cleaned up staging dir: " + stagingDir.getFileName());
         }
     }
 
@@ -252,7 +332,6 @@ public class SkillGenerator {
                                  Map<String, String> modelOverride, String threadId,
                                  String genMsgId) {
 
-        SkillGenerateAgent agent = agentFactory.createGenerateAgent(skillId, modelOverride);
         Map<String, String> routing = storeService.getModelRouting("skill/generate");
         String modelDesc = modelOverride != null && modelOverride.containsKey("model")
             ? modelOverride.get("model")
@@ -261,44 +340,65 @@ public class SkillGenerator {
         stepUpdate(threadId, genMsgId, "generating", "优化技能代码", "in_progress",
             "正在优化 Skill " + skillId + "（" + routing.getOrDefault("provider", "") + "/" + modelDesc + "）...");
 
-        // ChatMemory auto-loads conversation history via @MemoryId — no manual evolution reading
         Map<String, Object> memoryCtx = memoryService.getMemoryContext(skillId);
 
-        Map<String, String> currentFiles = Map.of(
-            "skillJson", skillJson, "uiJson", uiJson, "handlersJs", handlersJs);
-
-        String userMessage = PromptBuilder.buildGenerate(
-            "Refine skill based on feedback: " + feedback,
-            List.of(), memoryCtx, currentFiles);
-
         try {
-            StringBuilder acc = new StringBuilder();
-            CompletableFuture<String> done = new CompletableFuture<>();
+            // ── ReAct refine: seed working dir with existing files, let LLM update via tools ──
+            Path workDir = Paths.get(skillsBaseDir, skillId + "-refine");
+            SkillFileTools tools = new SkillFileTools(workDir);
+            if (Files.exists(workDir)) {
+                try (var walk = Files.walk(workDir)) {
+                    walk.sorted(Comparator.reverseOrder())
+                        .forEach(p -> { try { Files.delete(p); } catch (Exception ignored) {} });
+                }
+            }
+            Files.createDirectories(workDir);
+            // Seed existing files so the LLM can read them
+            Files.writeString(workDir.resolve("skill.json"), skillJson);
+            Files.writeString(workDir.resolve("ui.json"), uiJson);
+            Files.writeString(workDir.resolve("handlers.js"), handlersJs);
 
-            agent.generate(userMessage, skillId)
-                .onPartialResponse(acc::append)
-                .onCompleteResponse((ChatResponse response) -> {
-                    String text = response.aiMessage() != null ? response.aiMessage().text() : "";
-                    done.complete(text != null ? text : "");
-                })
-                .onError(done::completeExceptionally)
-                .start();
+            // Plan which files to update
+            PlannerAgent planner = agentFactory.createPlannerAgent(modelOverride);
+            String refinePrompt = "Optimize existing skill " + skillId + " based on feedback: " + feedback;
+            String planText = planner.plan(refinePrompt);
+            Plan plan = parsePlan(planText);
 
-            String raw = done.get(360, TimeUnit.SECONDS);
+            if (plan == null || plan.files().isEmpty()) {
+                return auditAndInstall(normalizer.normalize(
+                    new SkillFiles(skillJson, uiJson, handlersJs)), skillId, modelOverride,
+                    null, "Refine", null, threadId, genMsgId);
+            }
 
-            SkillFiles rawFiles = OutputParser.parseThreeFiles(raw);
+            // Execute: regenerate each file listed in the plan
+            ChatModel chatModel = agentFactory.createChatModel(modelOverride);
+            for (Plan.FileSpec file : plan.files()) {
+                stepUpdate(threadId, genMsgId, "generating", "优化技能代码", "in_progress",
+                    "优化 " + file.path());
+                String filePrompt = "优化以下文件，根据反馈: " + feedback + "\n\n"
+                    + "当前内容:\n" + (file.path().contains("ui") ? uiJson : file.path().contains("handler") ? handlersJs : skillJson);
+                ChatResponse resp = chatModel.chat(ChatRequest.builder()
+                    .messages(SystemMessage.from(filePrompt), UserMessage.from("输出 " + file.path() + " 的新内容"))
+                    .build());
+                String content = resp.aiMessage().text();
+                if (content != null && !content.isBlank()) {
+                    tools.updateFile(file.path(), stripMarkdownFences(content));
+                }
+            }
+
+            Map<String, String> allFiles = tools.readAllFiles();
+            SkillFiles rawFiles = buildSkillFiles(allFiles, skillId);
             SkillFiles rawFixed = new SkillFiles(
                 forceSkillId(rawFiles.skillJson(), skillId),
-                rawFiles.uiJson(),
-                rawFiles.handlersJs()
+                rawFiles.uiJson(), rawFiles.handlersJs(),
+                rawFiles.handlerModules(), rawFiles.uiFragments()
             );
-            SkillFiles normalized = normalizer.normalize(rawFixed);
 
-            String designDecision = OutputParser.extractDesignDecision(raw);
+            SkillFiles normalized = normalizer.normalize(rawFixed);
             String designTitle = "Refine: " + feedback.substring(0, Math.min(60, feedback.length()));
 
             return auditAndInstall(normalized, skillId, modelOverride,
-                null, designTitle, designDecision, threadId, genMsgId);
+                null, designTitle, null, threadId, genMsgId);
 
         } catch (Exception e) {
             log.error("LLM refine failed for {}", skillId, e);
@@ -311,6 +411,10 @@ public class SkillGenerator {
             eventBus.publish(new KernelEvent.PlanStep("error", "LLM 优化失败: " + msg, threadId));
             stepUpdate(threadId, genMsgId, "generating", "优化技能代码", "error", "LLM 优化失败: " + msg);
             return null;
+        } finally {
+            Path stagingDir = Paths.get(skillsBaseDir, skillId + "-refine");
+            cleanupDir(stagingDir);
+            System.out.println("[kernel] [refine] Cleaned up staging dir: " + stagingDir.getFileName());
         }
     }
 
@@ -321,21 +425,8 @@ public class SkillGenerator {
         String userMessage = PromptBuilder.buildRepair(error, current, originalIntent, attempt);
 
         try {
-            StringBuilder acc = new StringBuilder();
-            CompletableFuture<String> done = new CompletableFuture<>();
-
-            agent.repair(userMessage, skillId)
-                .onPartialResponse(acc::append)
-                .onCompleteResponse((ChatResponse response) -> {
-                    String text = response.aiMessage() != null ? response.aiMessage().text() : "";
-                    done.complete(text != null ? text : "");
-                })
-                .onError(done::completeExceptionally)
-                .start();
-
-            String raw = done.get(360, TimeUnit.SECONDS);
+            String raw = agent.repair(userMessage, skillId);
             return OutputParser.parseThreeFiles(raw);
-
         } catch (Exception e) {
             log.error("Repair call failed for {}", skillId, e);
             throw new RuntimeException("LLM 修复失败: " + e.getMessage(), e);
@@ -360,7 +451,7 @@ public class SkillGenerator {
                     throw new GateException("INVALID_MANIFEST", "skill.json 解析失败: " + e.getMessage());
                 }
 
-                SkillGenome genome = new SkillGenome(finalFiles.uiJson(), finalFiles.handlersJs());
+                SkillGenome genome = new SkillGenome(finalFiles.uiJson(), finalFiles.handlersJs(), finalFiles.handlerModules());
 
                 stepUpdate(threadId, genMsgId, "auditing", "安全审计", "in_progress", "正在审计 Skill " + manifest.id() + "...");
 
@@ -508,11 +599,36 @@ public class SkillGenerator {
                 .writeValueAsString(manifest);
             Files.writeString(skillDir.resolve("skill.json"), prettySkillJson);
 
-            String prettyUiJson = mapper.writerWithDefaultPrettyPrinter()
-                .writeValueAsString(mapper.readTree(files.uiJson()));
-            Files.writeString(genomeDir.resolve("ui.json"), prettyUiJson);
+            // ── Write UI files: multi-fragment or single-file ──
+            if (files.uiFragments() != null && !files.uiFragments().isEmpty()) {
+                Path uiDir = genomeDir.resolve("ui");
+                Files.createDirectories(uiDir);
+                for (var entry : files.uiFragments().entrySet()) {
+                    Path fragPath = uiDir.resolve(entry.getKey());
+                    Files.createDirectories(fragPath.getParent());
+                    String pretty = mapper.writerWithDefaultPrettyPrinter()
+                        .writeValueAsString(mapper.readTree(entry.getValue()));
+                    Files.writeString(fragPath, pretty);
+                }
+                // index.json is the main UI entry; it's already part of uiFragments
+            } else {
+                String prettyUiJson = mapper.writerWithDefaultPrettyPrinter()
+                    .writeValueAsString(mapper.readTree(files.uiJson()));
+                Files.writeString(genomeDir.resolve("ui.json"), prettyUiJson);
+            }
 
-            Files.writeString(genomeDir.resolve("handlers.js"), files.handlersJs());
+            // ── Write handler files: multi-module or single-file ──
+            if (files.handlerModules() != null && !files.handlerModules().isEmpty()) {
+                Path handlersDir = genomeDir.resolve("handlers");
+                Files.createDirectories(handlersDir);
+                for (var entry : files.handlerModules().entrySet()) {
+                    Path modPath = handlersDir.resolve(entry.getKey());
+                    Files.createDirectories(modPath.getParent());
+                    Files.writeString(modPath, entry.getValue());
+                }
+            } else {
+                Files.writeString(genomeDir.resolve("handlers.js"), files.handlersJs());
+            }
 
             log.info("Generated skill files written to {}", skillDir);
 
@@ -533,32 +649,25 @@ public class SkillGenerator {
                 stepUpdate(threadId, genMsgId, key, stepLabel(key), "done", "Skill " + skillId + " 已生成并激活");
             }
 
-            // Push final generation card with skillId set
+            // Push final generation card with skillId + allDone
             if (onMessageUpdate != null && genMsgId != null) {
-                Map<String, Map<String, String>> genSteps = generationSteps.get(genMsgId);
-                if (genSteps != null) {
-                    List<Map<String, String>> stepsList = new ArrayList<>();
-                    for (String k : new String[]{"generating", "normalizing", "auditing", "repairing", "installing"}) {
-                        if (genSteps.containsKey(k)) stepsList.add(genSteps.get(k));
-                    }
-                    Map<String, Object> meta = new LinkedHashMap<>();
-                    meta.put("type", "generation");
-                    meta.put("steps", stepsList);
-                    meta.put("skillId", skillId);
-                    meta.put("allDone", true);
-
-                    Map<String, Object> message = new LinkedHashMap<>();
-                    message.put("id", genMsgId);
-                    message.put("role", "assistant");
-                    message.put("content", "");
-                    message.put("time", timeStr());
-                    message.putAll(meta);
-
-                    onMessageUpdate.accept(threadId, message);
-                }
+                // Add done log entry directly (avoid genLog which pushes allDone=false)
+                generationLogs.computeIfAbsent(genMsgId, k -> new ArrayList<>());
+                Map<String, String> finalEntry = new LinkedHashMap<>();
+                finalEntry.put("time", timeStr());
+                finalEntry.put("action", "done");
+                finalEntry.put("path", skillId);
+                finalEntry.put("detail", "");
+                generationLogs.get(genMsgId).add(finalEntry);
+                pushGenerationCard(threadId, genMsgId, skillId, true, null);
             }
 
             skillManager.activate(skillId, threadId);
+
+            // Final push to guarantee card shows as done (overwrite any late genLog pushes)
+            if (onMessageUpdate != null && genMsgId != null) {
+                pushGenerationCard(threadId, genMsgId, skillId, true, null);
+            }
             return skillId;
 
         } catch (Exception e) {
@@ -585,52 +694,276 @@ public class SkillGenerator {
         };
     }
 
-    /** Write a step message to the conversation DB and push update to frontend. */
-    private void stepUpdate(String threadId, String genMsgId, String key, String label, String status, String desc) {
-        if (threadId == null || threadId.isEmpty() || genMsgId == null) return;
-
-        // Aggregate step state via onMessageUpdate callback
-        if (onMessageUpdate != null) {
-            generationSteps.computeIfAbsent(genMsgId, k -> new LinkedHashMap<>());
-            Map<String, Map<String, String>> genSteps = generationSteps.get(genMsgId);
-            Map<String, String> step = new LinkedHashMap<>();
-            step.put("key", key);
-            step.put("label", label);
-            step.put("status", status);
-            genSteps.put(key, step);
-
-            // Build message record with aggregated steps
-            List<Map<String, String>> stepsList = new ArrayList<>();
-            for (String k : new String[]{"generating", "normalizing", "auditing", "repairing", "installing"}) {
-                if (genSteps.containsKey(k)) {
-                    stepsList.add(genSteps.get(k));
+    /** Parse the Planner's JSON output into a Plan object. */
+    private Plan parsePlan(String planText) {
+        try {
+            // Strip any markdown fences or surrounding text
+            String json = planText.trim();
+            if (json.startsWith("```")) {
+                int start = json.indexOf('\n');
+                int end = json.lastIndexOf("```");
+                if (start >= 0 && end >= 0) json = json.substring(start, end).trim();
+            }
+            if (json.startsWith("{")) {
+                int braceEnd = json.lastIndexOf('}');
+                if (braceEnd >= 0) json = json.substring(0, braceEnd + 1);
+            }
+            JsonNode root = mapper.readTree(json);
+            String skillId = root.has("skillId") ? root.get("skillId").asText() : "";
+            String runtime = root.has("runtime") ? root.get("runtime").asText() : "js";
+            List<String> capabilities = new ArrayList<>();
+            if (root.has("capabilities")) {
+                for (JsonNode c : root.get("capabilities")) capabilities.add(c.asText());
+            }
+            List<Plan.FileSpec> files = new ArrayList<>();
+            if (root.has("files")) {
+                for (JsonNode f : root.get("files")) {
+                    files.add(new Plan.FileSpec(
+                        f.get("path").asText(),
+                        f.has("purpose") ? f.get("purpose").asText() : ""
+                    ));
                 }
             }
+            return new Plan(skillId, runtime, capabilities, files);
+        } catch (Exception e) {
+            System.out.println("[kernel] [generate] Failed to parse plan: " + e.getMessage());
+            return null;
+        }
+    }
 
-            boolean allDone = stepsList.stream()
-                .allMatch(s -> "done".equals(s.get("status")));
+    /** Build a context-rich prompt for generating a single file. */
+    private String buildFilePrompt(Plan.FileSpec file, Plan plan, String intent) {
+        var sb = new StringBuilder();
+        sb.append("你是无为平台（Wuwei）的技能开发者。\n\n");
+        sb.append("用户需求: ").append(intent).append("\n");
+        sb.append("技能ID: ").append(plan.skillId()).append("\n");
+        sb.append("运行时: ").append(plan.runtime()).append("\n");
+        sb.append("声明能力: ").append(String.join(", ", plan.capabilities())).append("\n\n");
 
-            Map<String, Object> meta = new LinkedHashMap<>();
-            meta.put("type", "generation");
-            meta.put("steps", stepsList);
-            meta.put("skillId", null); // updated by installSkill
-            meta.put("allDone", allDone);
-
-            Map<String, Object> message = new LinkedHashMap<>();
-            message.put("id", genMsgId);
-            message.put("role", "assistant");
-            message.put("content", "");
-            message.put("time", timeStr());
-            message.putAll(meta);
-
-            onMessageUpdate.accept(threadId, message);
+        if (file.path().contains("skill.json")) {
+            sb.append("""
+                输出 skill.json 的完整内容。规则:
+                - 精确7个顶级字段: id, version, abi, runtime, meta, capabilities, signature（多一个少一个都会失败）
+                - id: kebab-case, version: X.Y.Z, abi: "1.0"
+                - capabilities: JSON对象{}不是数组[], 只声明handlers.js实际使用的能力, 每个能力用空对象{}如"database":{}
+                - signature: 必须是 {"publisher":"local"}
+                - runtime: js=browser-js""");
+        } else if (file.path().contains("ui")) {
+            sb.append("""
+                输出 ui/index.json 的完整内容。A2UI组件树格式:
+                - 顶层 {"components": [...]} 数组
+                - root组件必须是 id="root" component="Column"
+                - Column/Row的children是id字符串数组, Button的child是单个id字符串
+                - Button的action.event.name必须等于Button的id
+                - label Text组件不能放在任何container的children里
+                - 所有children/child引用的id必须存在
+                - Text: {"id":"x","component":"Text","text":"内容","variant":"h1|h2|h3|h4|h5|body|caption"}
+                - Accordion items: [{value,triggerText,contentId}]""");
+        } else if (file.path().contains("handler")) {
+            sb.append("""
+                输出 handlers/index.js 的完整内容。规则:
+                - 顶层函数自动注册, 禁止 module.exports
+                - JS运行时: 禁止 async/await/Promise/eval/Function/fetch/WebSocket
+                - 函数签名: function onXxx(__inputs__, capability)
+                - Button "my-btn" -> function onMyBtn
+                - 用capability.ui.set(id,"text",value)更新Text文字
+                - 从__inputs__.fieldId读取TextField输入值
+                - capability.storage.get/put/delete 做KV持久化
+                - capability.db.run(sql) DDL, capability.db.query(sql,[params]) SELECT, capability.db.execute(sql,[params]) INSERT/UPDATE/DELETE
+                - db params可以是数字或字符串: query("SELECT..OFFSET ?", [0]) √ query("SELECT..OFFSET ?", ["0"]) √
+                - 如果声明了database: onInit里先用run()建表, 用execute()插数据, 在按钮handler里用query()查数据""");
+        } else {
+            sb.append("输出 ").append(file.path()).append(" 的完整内容。\n");
         }
 
-        eventBus.publish(new KernelEvent.PlanStep(status, desc, threadId));
+        sb.append("\n只输出文件内容本身，不要Markdown代码块，不要解释。");
+        return sb.toString();
+    }
+
+    /** Build a prompt for database seeding. */
+    private String buildDbSeedPrompt(Plan.FileSpec file, Plan plan, String intent) {
+        return "你是无为平台（Wuwei）的数据库管理员。\n\n"
+            + "用户需求: " + intent + "\n"
+            + "技能ID: " + plan.skillId() + "\n\n"
+            + "用途: " + file.purpose() + "\n\n"
+            + "请输出纯SQL语句（SQLite语法），每条语句以分号结尾。\n"
+            + "- CREATE TABLE IF NOT EXISTS 建表\n"
+            + "- INSERT INTO 插入数据\n"
+            + "- 字符串用单引号，中文直接写\n"
+            + "- 不要Markdown代码块，不要解释，只输出SQL";
+    }
+
+    /** Strip markdown fences from LLM output. */
+    private static String stripMarkdownFences(String content) {
+        return content
+            .replaceFirst("^```(?:json|js)?\\s*\\n?", "")
+            .replaceFirst("\\n?```\\s*$", "")
+            .trim();
     }
 
     // In-memory aggregation of generation steps keyed by genMsgId
     private final ConcurrentHashMap<String, Map<String, Map<String, String>>> generationSteps = new ConcurrentHashMap<>();
+    // Streaming log entries for frontend GenerationCard
+    private final ConcurrentHashMap<String, List<Map<String, String>>> generationLogs = new ConcurrentHashMap<>();
+
+    /** Append a streaming log entry (does NOT push card by itself). */
+    private void genLog(String threadId, String genMsgId, String action, String path, String detail) {
+        if (threadId == null || genMsgId == null || onMessageUpdate == null) return;
+        generationLogs.computeIfAbsent(genMsgId, k -> new ArrayList<>());
+        Map<String, String> entry = new LinkedHashMap<>();
+        entry.put("time", timeStr());
+        entry.put("action", action);
+        entry.put("path", path != null ? path : "");
+        entry.put("detail", detail != null ? detail : "");
+        generationLogs.get(genMsgId).add(entry);
+    }
+
+    /** Push current generation card state to frontend. */
+    private void pushGenerationCard(String threadId, String genMsgId,
+                                     String skillId, boolean allDone, String error) {
+        if (onMessageUpdate == null) return;
+        Map<String, Map<String, String>> genSteps = generationSteps.get(genMsgId);
+        List<Map<String, String>> stepsList = new ArrayList<>();
+        if (genSteps != null) {
+            for (String k : new String[]{"generating", "normalizing", "auditing", "repairing", "installing"}) {
+                if (genSteps.containsKey(k)) stepsList.add(genSteps.get(k));
+            }
+        }
+        List<Map<String, String>> logs = generationLogs.getOrDefault(genMsgId, List.of());
+        // Keep last 50 entries
+        List<Map<String, String>> trimmed = logs.size() > 50
+            ? new ArrayList<>(logs.subList(logs.size() - 50, logs.size())) : logs;
+
+        Map<String, Object> msg = new LinkedHashMap<>();
+        msg.put("id", genMsgId);
+        msg.put("role", "assistant");
+        msg.put("content", "");
+        msg.put("time", timeStr());
+        msg.put("type", "generation");
+        msg.put("steps", stepsList);
+        msg.put("log", trimmed);
+        msg.put("skillId", skillId);
+        msg.put("allDone", allDone);
+        if (error != null) msg.put("error", error);
+
+        onMessageUpdate.accept(threadId, msg);
+    }
+
+    /** Write a phase step update + push card. */
+    private void stepUpdate(String threadId, String genMsgId, String key, String label, String status, String desc) {
+        if (threadId == null || threadId.isEmpty() || genMsgId == null) return;
+        if (onMessageUpdate != null) {
+            generationSteps.computeIfAbsent(genMsgId, k -> new LinkedHashMap<>());
+            Map<String, String> step = new LinkedHashMap<>();
+            step.put("key", key);
+            step.put("label", label);
+            step.put("status", status);
+            generationSteps.get(genMsgId).put(key, step);
+
+            boolean allDone = generationSteps.get(genMsgId).values().stream().allMatch(s -> "done".equals(s.get("status")));
+            boolean hasError = generationSteps.get(genMsgId).values().stream().anyMatch(s -> "error".equals(s.get("status")));
+            pushGenerationCard(threadId, genMsgId, null, allDone, hasError ? desc : null);
+        }
+        eventBus.publish(new KernelEvent.PlanStep(status, desc, threadId));
+    }
+
+    /**
+     * Convert flat file map from ReAct working directory into a SkillFiles record.
+     * Detects single-file vs multi-file layout automatically.
+     */
+    private SkillFiles buildSkillFiles(Map<String, String> allFiles, String skillId) {
+        String skillJson = allFiles.getOrDefault("skill.json", "");
+        if (skillJson.isEmpty()) {
+            skillJson = "{ \"id\": \"" + skillId.replace("new-", "skill-") + "\", \"version\": \"1.0.0\", \"abi\": \"1.0\", \"runtime\": \"js\", \"meta\": {}, \"capabilities\": {}, \"signature\": { \"publisher\": \"local\" } }";
+        }
+        // If agent wrote temp "new-xxx" id, replace with stable "skill-xxx"
+        String currentId = extractSkillId(skillJson);
+        if (currentId.startsWith("new-")) {
+            skillJson = forceSkillId(skillJson, currentId.replace("new-", "skill-"));
+        }
+
+        // Detect UI layout
+        String uiJson;
+        Map<String, String> uiFragments = null;
+        if (allFiles.containsKey("ui/index.json")) {
+            uiJson = allFiles.get("ui/index.json");
+            uiFragments = new LinkedHashMap<>();
+            for (var entry : allFiles.entrySet()) {
+                if (entry.getKey().startsWith("ui/")) {
+                    uiFragments.put(entry.getKey().substring(3), entry.getValue());
+                }
+            }
+        } else if (allFiles.containsKey("ui.json")) {
+            uiJson = allFiles.get("ui.json");
+        } else {
+            uiJson = "{}";
+        }
+
+        // Detect handlers layout
+        String handlersJs;
+        Map<String, String> handlerModules = null;
+        if (allFiles.containsKey("handlers/index.js")) {
+            handlersJs = allFiles.get("handlers/index.js");
+            handlerModules = new LinkedHashMap<>();
+            for (var entry : allFiles.entrySet()) {
+                if (entry.getKey().startsWith("handlers/")) {
+                    handlerModules.put(entry.getKey().substring(9), entry.getValue());
+                }
+            }
+        } else if (allFiles.containsKey("handlers.js")) {
+            handlersJs = allFiles.get("handlers.js");
+        } else {
+            handlersJs = "";
+        }
+
+        return new SkillFiles(skillJson, uiJson, handlersJs, handlerModules, uiFragments);
+    }
+
+    /**
+     * If the ReAct model didn't create all required files, fill in minimal valid stubs.
+     * This lets the audit→repair loop fix them instead of failing outright.
+     */
+    private SkillFiles ensureRequiredFiles(SkillFiles files, String skillId, String intent) {
+        String uiJson = files.uiJson();
+        String handlersJs = files.handlersJs();
+        boolean patched = false;
+
+        // Use the real skill id from skill.json if available, not the temp UUID
+        String displayId = extractSkillId(files.skillJson());
+        if (displayId.equals("unknown") || displayId.startsWith("new-")) {
+            displayId = skillId.replace("new-", "skill-");
+        }
+
+        if (uiJson == null || uiJson.isBlank() || uiJson.equals("{}")) {
+            uiJson = "{"
+                + "\"components\": [{"
+                + "\"id\": \"root\","
+                + "\"component\": \"Column\","
+                + "\"children\": [\"title\"]"
+                + "}, {"
+                + "\"id\": \"title\","
+                + "\"component\": \"Text\","
+                + "\"text\": \"Skill: " + displayId + "\""
+                + "}]}";
+            patched = true;
+        }
+
+        if (handlersJs == null || handlersJs.isBlank()) {
+            handlersJs = "// Skill: " + displayId + "\n"
+                + "// Intent: " + (intent != null ? intent.replace("\n", " ") : "") + "\n\n"
+                + "function onInit(__inputs__, capability) {\n"
+                + "}\n";
+            patched = true;
+        }
+
+        if (patched) {
+            System.out.println("[kernel] [generate] Safety net: filled missing files for " + skillId);
+        }
+
+        return new SkillFiles(files.skillJson(), uiJson, handlersJs,
+            files.handlerModules(), files.uiFragments());
+    }
+
 
     private String existingSkillsSummary() {
         var skills = skillManager.listSkills();
@@ -654,11 +987,104 @@ public class SkillGenerator {
         return skillJson;
     }
 
+    private List<String> buildFileProgress(SkillFiles files) {
+        List<String> progress = new ArrayList<>();
+        progress.add("skill.json ✓");
+        if (files.handlerModules() != null && !files.handlerModules().isEmpty()) {
+            for (String path : files.handlerModules().keySet()) {
+                progress.add(path + " ✓");
+            }
+        } else if (files.handlersJs() != null && !files.handlersJs().isBlank()) {
+            progress.add("handlers.js ✓");
+        }
+        if (files.uiFragments() != null && !files.uiFragments().isEmpty()) {
+            for (String path : files.uiFragments().keySet()) {
+                progress.add(path + " ✓");
+            }
+        } else if (files.uiJson() != null && !files.uiJson().isBlank()) {
+            progress.add("ui.json ✓");
+        }
+        return progress;
+    }
+
     private String extractSkillId(String skillJson) {
         try {
             return mapper.readTree(skillJson).get("id").asText();
         } catch (Exception e) {
             return "unknown";
+        }
+    }
+
+    /** Copy seed DB and data/ from staging to installed skill directory. */
+    private void copySeedData(Path workDir, Path skillDir) {
+        try {
+            Path phenotypeDir = skillDir.resolve("phenotype");
+            Files.createDirectories(phenotypeDir);
+            Path seedDb = workDir.resolve("seed.db");
+            if (Files.exists(seedDb)) {
+                Files.copy(seedDb, phenotypeDir.resolve("data.db"),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            }
+            Path stgData = workDir.resolve("data");
+            if (Files.isDirectory(stgData)) {
+                Path dataDir = skillDir.resolve("genome").resolve("data");
+                try (var walk = Files.walk(stgData)) {
+                    for (Path f : walk.filter(Files::isRegularFile).toList()) {
+                        Path rel = stgData.relativize(f);
+                        Path target = dataDir.resolve(rel);
+                        Files.createDirectories(target.getParent());
+                        Files.copy(f, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            System.out.println("[kernel] [generate] Seed data copy failed: " + e.getMessage());
+        }
+    }
+
+    /** Recursively delete a directory. */
+    private void cleanupDir(Path dir) {
+        try {
+            if (Files.exists(dir)) {
+                try (var walk = Files.walk(dir)) {
+                    walk.sorted(Comparator.reverseOrder())
+                        .forEach(p -> { try { Files.delete(p); } catch (Exception ignored) {} });
+                }
+            }
+        } catch (Exception ignored) {}
+    }
+
+    /** Copy docs/ resources from classpath to workDir so the agent can readFile them. */
+    private void seedDocs(Path workDir) {
+        try {
+            Path docsDir = workDir.resolve("docs");
+            Files.createDirectories(docsDir);
+
+            // Only seed essential docs — too many docs encourages the agent to read them all
+            String[] docs = {
+                "README.md", "rules.md",
+                "a2ui-components.md", "a2ui-layout.md",
+                "runtime-js.md",
+                "examples/pagination-db.md",
+                "examples/database-crud.md"
+            };
+
+            for (String doc : docs) {
+                String resourcePath = "docs/" + doc;
+                var is = getClass().getClassLoader().getResourceAsStream(resourcePath);
+                if (is != null) {
+                    Path target = docsDir.resolve(doc);
+                    Files.createDirectories(target.getParent());
+                    Files.copy(is, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                    is.close();
+                } else {
+                    System.out.println("[kernel] [generate] WARNING: doc resource not found: " + resourcePath);
+                }
+            }
+            System.out.println("[kernel] [generate] Seeded docs/ into " + docsDir);
+        } catch (Exception e) {
+            System.out.println("[kernel] [generate] Failed to seed docs: " + e.getMessage());
+            // Non-fatal — agent can still work without docs
         }
     }
 }

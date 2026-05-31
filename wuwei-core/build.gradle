@@ -20,6 +20,7 @@ repositories {
 ext {
     graalvmVersion = '25.0.2'
     helidonVersion = '4.1.4'
+    langchain4jVersion = '1.15.0'
 }
 
 dependencies {
@@ -42,8 +43,8 @@ dependencies {
     implementation 'com.fasterxml.jackson.core:jackson-databind:2.17.0'
 
     // LangChain4j — direct LLM calls, replaces PI subprocess
-    implementation 'dev.langchain4j:langchain4j:1.15.0'
-    implementation 'dev.langchain4j:langchain4j-open-ai:1.15.0'
+    implementation "dev.langchain4j:langchain4j:${langchain4jVersion}"
+    implementation "dev.langchain4j:langchain4j-open-ai:${langchain4jVersion}"
 
     // SLF4J simple logger
     implementation 'org.slf4j:slf4j-jdk14:2.0.13'
@@ -103,6 +104,7 @@ graalvmNative {
             buildArgs.add('-H:IncludeResources=prompts/generate.txt')
             buildArgs.add('-H:IncludeResources=prompts/repair.txt')
             buildArgs.add('-H:IncludeResources=prompts/refine.txt')
+            buildArgs.add('-H:IncludeResources=docs/.*')
             // LangChain4j
             buildArgs.add('--initialize-at-build-time=dev.langchain4j')
             buildArgs.add('--initialize-at-run-time=dev.langchain4j.internal')

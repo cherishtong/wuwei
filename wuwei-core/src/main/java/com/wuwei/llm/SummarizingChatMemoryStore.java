@@ -106,7 +106,7 @@ public class SummarizingChatMemoryStore implements ChatMemoryStore {
             } else {
                 continue;
             }
-            rows.add(Map.of("type", type, "text", text));
+            rows.add(Map.of("type", type, "text", text != null ? text : ""));
         }
         storeService.saveChatMessages(skillId, rows);
     }

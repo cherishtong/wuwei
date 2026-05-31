@@ -92,5 +92,43 @@ export function createProxyCapabilities(
     };
   }
 
+  if (declaredCaps.crypto) {
+    caps.crypto = {
+      encrypt: (plaintext: string, key: string) =>
+        proxyCall(skillId, 'crypto', 'encrypt', [plaintext, key]) as Promise<string>,
+      decrypt: (ciphertext: string, key: string) =>
+        proxyCall(skillId, 'crypto', 'decrypt', [ciphertext, key]) as Promise<string>,
+      hash: (data: string) =>
+        proxyCall(skillId, 'crypto', 'hash', [data]) as Promise<string>,
+      deriveKey: (password: string, salt: string) =>
+        proxyCall(skillId, 'crypto', 'deriveKey', [password, salt]) as Promise<string>,
+      randomBytes: (n: number) =>
+        proxyCall(skillId, 'crypto', 'randomBytes', [n]) as Promise<string>,
+      generatePassword: (len: number) =>
+        proxyCall(skillId, 'crypto', 'generatePassword', [len]) as Promise<string>,
+    };
+  }
+
+  if (declaredCaps.db || declaredCaps.database) {
+    caps.db = {
+      run: (sql: string) =>
+        proxyCall(skillId, 'db', 'run', [sql]) as Promise<void>,
+      query: (sql: string, params?: unknown[]) =>
+        proxyCall(skillId, 'db', 'query', [sql, params]) as Promise<Record<string, unknown>[]>,
+      execute: (sql: string, params?: unknown[]) =>
+        proxyCall(skillId, 'db', 'execute', [sql, params]) as Promise<{ changes: number }>,
+    };
+  }
+
+  if (declaredCaps.websearch) {
+    caps.websearch = {
+      search: (query: string, opts?: { limit?: number }) =>
+        proxyCall(skillId, 'websearch', 'search', [query, opts?.limit ?? 5]) as Promise<{
+          results: { title: string; url: string; snippet: string; score?: number }[];
+          answer: string;
+        }>,
+    };
+  }
+
   return caps;
 }

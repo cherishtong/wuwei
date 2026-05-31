@@ -430,11 +430,14 @@ public class MessageRouter {
             if (Files.exists(manifestPath)) {
                 sources.put("skillJson", Files.readString(manifestPath));
             }
-            Path uiPath = skillDir.resolve("genome").resolve("ui.json");
+            // Multi-file (ui/index.json, handlers/index.js) or flat (ui.json, handlers.js)
+            Path uiMulti = skillDir.resolve("genome/ui/index.json");
+            Path uiPath = Files.exists(uiMulti) ? uiMulti : skillDir.resolve("genome/ui.json");
             if (Files.exists(uiPath)) {
                 sources.put("uiJson", Files.readString(uiPath));
             }
-            Path handlersPath = skillDir.resolve("genome").resolve("handlers.js");
+            Path jsMulti = skillDir.resolve("genome/handlers/index.js");
+            Path handlersPath = Files.exists(jsMulti) ? jsMulti : skillDir.resolve("genome/handlers.js");
             if (Files.exists(handlersPath)) {
                 sources.put("handlersJs", Files.readString(handlersPath));
             }

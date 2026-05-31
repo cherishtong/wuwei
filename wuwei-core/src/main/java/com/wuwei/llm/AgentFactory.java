@@ -42,7 +42,7 @@ public class AgentFactory {
             .apiKey(config.apiKey() != null && !config.apiKey().isBlank() ? config.apiKey()
                 : (System.getenv("OPENAI_API_KEY") != null ? System.getenv("OPENAI_API_KEY") : ""))
             .modelName(config.model())
-            .timeout(Duration.ofSeconds(120))
+            .timeout(Duration.ofSeconds(300))
             .maxRetries(1)
             .logRequests(false)
             .logResponses(false)
@@ -52,7 +52,7 @@ public class AgentFactory {
             .apiKey(config.apiKey() != null && !config.apiKey().isBlank() ? config.apiKey()
                 : (System.getenv("OPENAI_API_KEY") != null ? System.getenv("OPENAI_API_KEY") : ""))
             .modelName(config.model())
-            .timeout(Duration.ofSeconds(120))
+            .timeout(Duration.ofSeconds(300))
             .logRequests(false)
             .logResponses(false)
             .build();
@@ -77,11 +77,25 @@ public class AgentFactory {
             .build();
     }
 
+    /** Synchronous (non-streaming) generate agent — avoids DeepSeek V4 streaming tool-call leakage bug. */
+    public SkillGenerateSyncAgent createGenerateSyncAgent(String skillId, Map<String, String> override) {
+        LlmConfig config = resolveConfig("skill/generate", override);
+        ChatModel model = buildChatModel(config);
+        return AiServices.builder(SkillGenerateSyncAgent.class)
+            .chatModel(model)
+            .chatMemoryProvider(memoryId -> MessageWindowChatMemory.builder()
+                .id(memoryId)
+                .maxMessages(20)
+                .chatMemoryStore(memoryStore)
+                .build())
+            .build();
+    }
+
     public SkillRepairAgent createRepairAgent(String skillId, Map<String, String> override) {
         LlmConfig config = resolveConfig("skill/repair", override);
-        StreamingChatModel model = buildStreamingModel(config);
+        ChatModel model = buildChatModel(config);
         return AiServices.builder(SkillRepairAgent.class)
-            .streamingChatModel(model)
+            .chatModel(model)
             .chatMemoryProvider(memoryId -> MessageWindowChatMemory.builder()
                 .id(memoryId)
                 .maxMessages(20)
@@ -101,6 +115,21 @@ public class AgentFactory {
                 .chatMemoryStore(memoryStore)
                 .build())
             .build();
+    }
+
+    /** Create a Planner agent — plain text, no tools. Used once per generation. */
+    public PlannerAgent createPlannerAgent(Map<String, String> override) {
+        LlmConfig config = resolveConfig("skill/generate", override);
+        ChatModel model = buildChatModel(config);
+        return AiServices.builder(PlannerAgent.class)
+            .chatModel(model)
+            .build();
+    }
+
+    /** Create a bare ChatModel for single-shot file generation. */
+    public ChatModel createChatModel(Map<String, String> override) {
+        LlmConfig config = resolveConfig("skill/generate", override);
+        return buildChatModel(config);
     }
 
     public AiAskAgent createAskAgent(Map<String, String> override) {
@@ -126,14 +155,15 @@ public class AgentFactory {
     }
 
     private ChatModel buildChatModel(LlmConfig config) {
+        System.out.println("[kernel] [AgentFactory] buildChatModel: baseUrl=" + resolveBaseUrl(config) + " model=" + config.model() + " hasApiKey=" + (!resolveApiKey(config).isEmpty()));
         return OpenAiChatModel.builder()
             .baseUrl(resolveBaseUrl(config))
             .apiKey(resolveApiKey(config))
             .modelName(config.model())
             .timeout(Duration.ofSeconds(300))
-            .maxRetries(2)
-            .logRequests(false)
-            .logResponses(false)
+            .maxRetries(1)
+            .logRequests(true)
+            .logResponses(true)
             .build();
     }
 

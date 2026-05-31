@@ -55,7 +55,7 @@ public final class PromptBuilder {
                     sb.append(s).append("\n");
                 }
             }
-            sb.append("\n如果你要创建的新 Skill 与现有 Skill 功能重复，可以建议用户直接使用现有 Skill。\n\n");
+            sb.append("\n参考现有 Skill 的设计模式，但必须创建用户需要的新 Skill。\n\n");
         }
 
         // Current files section (for refine)

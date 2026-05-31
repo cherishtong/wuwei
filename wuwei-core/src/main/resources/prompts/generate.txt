@@ -553,6 +553,17 @@ Handler __inputs__: { "num1": "5" }
 - capability.os.notify(title, body) → void（需声明 os capability）
 - capability.network.fetch({url, method?, headers?, body?}) → {status, body}（需声明 network capability）
 - capability.ai.ask(prompt) → {status, body}（需声明 ai capability）
+- capability.db.run(sql) → void（需声明 database，仅 DDL 语句）
+- capability.db.query(sql, [params]) → [{col: val, ...}]（需声明 database，仅 SELECT）
+- capability.db.execute(sql, [params]) → {changes: N}（需声明 database，INSERT/UPDATE/DELETE）
+- capability.db.transaction(fn) → void（需声明 database，事务包装）
+- capability.websearch.search(query, limit?) → {results: [{title, url, snippet, score}]}（需声明 websearch）
+- capability.crypto.deriveKey(password, salt) → key (base64)（需声明 crypto）
+- capability.crypto.encrypt(plaintext, key) → ciphertext (base64)（需声明 crypto，AES-256-GCM）
+- capability.crypto.decrypt(ciphertext, key) → plaintext（需声明 crypto）
+- capability.crypto.hash(data) → hex string（需声明 crypto，SHA-256）
+- capability.crypto.randomBytes(n) → base64（需声明 crypto，上限 1024）
+- capability.crypto.generatePassword(len) → string（需声明 crypto）
 
 ### network capability 使用规则
 
@@ -597,6 +608,149 @@ if (result.status === 200) {
 - 知道具体 API 地址（如天气 API、翻译 API）→ 用 network.fetch，声明 allowlist
 - 需要灵活搜索/检索/推理（如查诗词、查资料、总结文本）→ 用 ai.ask
 - 不知道 API 地址 → 必须用 ai.ask，绝对不能编造 URL！
+
+### database capability 使用规则
+
+**database 为每个 Skill 提供独立的 SQLite 数据库文件。** 声明 `"database": {}` 后可用。
+
+```js
+// 创建表（DDL）
+capability.db.run("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, age INTEGER)");
+
+// 查询数据（SELECT），返回数组 [{col: val, ...}]
+var rows = capability.db.query("SELECT * FROM users WHERE age > ?", [18]);
+// rows = [{id: 1, name: "张三", age: 25}, {id: 2, name: "李四", age: 30}]
+
+// 插入/更新/删除（INSERT/UPDATE/DELETE），返回 {changes: N}
+var result = capability.db.execute("INSERT INTO users (name, age) VALUES (?, ?)", ["王五", 28]);
+// result = {changes: 1}
+
+// 事务包装
+capability.db.transaction(function() {
+  capability.db.execute("INSERT INTO users (name, age) VALUES (?, ?)", ["赵六", 22]);
+  capability.db.execute("UPDATE users SET age = ? WHERE name = ?", [23, "赵六"]);
+});
+```
+
+**安全限制：**
+- DDL 仅允许：CREATE TABLE/INDEX/VIEW, ALTER TABLE, DROP TABLE/INDEX
+- DML 仅允许：SELECT, INSERT, UPDATE, DELETE, REPLACE
+- 禁止多语句（分号分隔）、PRAGMA、ATTACH
+- 查询最多返回 10000 行，超时 5 秒
+- 最多创建 50 张表
+- 数据库文件上限 100MB
+
+### websearch capability 使用规则
+
+**websearch 用于联网搜索实时信息。** 声明 `"websearch": {}` 后可用。
+
+```js
+// 基本搜索
+var result = capability.websearch.search("今天天气");
+// result = {results: [{title: "...", url: "https://...", snippet: "...", score: 0.9}, ...]}
+
+// 指定返回数量（默认 5，最大 10）
+var result = capability.websearch.search("最新新闻", 10);
+```
+
+**websearch vs ai.ask vs network.fetch 选择指南：**
+- 需要搜索互联网实时信息（新闻、天气、股价等）→ 用 websearch
+- 需要灵活推理/总结/分析/代码生成 → 用 ai.ask
+- 知道具体 API 地址 → 用 network.fetch
+
+### crypto capability 使用规则
+
+**crypto 提供加密和安全功能。** 声明 `"crypto": {}` 后可用。
+
+```js
+// 从密码派生密钥（PBKDF2 256-bit）
+var key = capability.crypto.deriveKey("my-password", "random-salt");
+// key = "aGVsbG8gd29ybGQ..." (base64)
+
+// AES-256-GCM 加密
+var encrypted = capability.crypto.encrypt("敏感数据", key);
+// encrypted = base64(nonce + ciphertext)
+
+// AES-256-GCM 解密
+var plaintext = capability.crypto.decrypt(encrypted, key);
+// plaintext = "敏感数据"
+
+// SHA-256 哈希（返回 hex 字符串）
+var hash = capability.crypto.hash("hello world");
+// hash = "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
+
+// 生成随机字节（base64 编码，最多 1024 字节）
+var random = capability.crypto.randomBytes(32);
+
+// 生成随机密码（大小写+数字+符号）
+var password = capability.crypto.generatePassword(20);
+// password = "aB3$xK9@mP2^qR7!vL5"
+```
+
+**安全注意：**
+- 加密密钥在日志中自动脱敏
+- randomBytes 上限 1024 字节
+- 所有密钥/密文不记录到日志
+
+### 多文件 Skill 结构
+
+**对于复杂 Skill（数据库操作、加密、多模块），推荐使用多文件结构：**
+
+```
+genome/
+├── handlers/           # 多 JS 文件模式
+│   ├── index.js        # 入口文件：onInit + 事件处理函数
+│   ├── lib/
+│   │   └── helpers.js  # 共享辅助模块
+│   └── features/
+│       └── crud.js     # 功能模块
+├── ui/                 # 多 UI 片段模式
+│   ├── index.json      # 主布局，用 $ref 引用其他片段
+│   └── components/
+│       └── form.json   # 可复用的 UI 组件片段
+```
+
+**CommonJS require() 用法：**
+```js
+// handlers/index.js
+var helpers = require('./lib/helpers.js');
+var crud = require('./features/crud.js');
+
+function onInit(__inputs__, capability) {
+  var data = helpers.loadData(capability);
+  crud.initTable(capability);
+}
+
+// handlers/lib/helpers.js
+function loadData(capability) { ... }
+module.exports = { loadData: loadData };
+
+// handlers/features/crud.js
+function initTable(capability) { ... }
+module.exports = { initTable: initTable };
+```
+
+**UI $ref 用法：**
+```json
+// ui/index.json
+{ "components": [
+  { "id": "root", "component": "Column", "children": ["title", "form-area"] },
+  { "id": "title", "component": "Text", "text": "数据管理", "variant": "h1" },
+  { "$ref": "./components/form.json#FormSection" }
+] }
+
+// ui/components/form.json
+{ "FormSection": {
+  "id": "form-area",
+  "component": "Column",
+  "children": ["name-input", "submit-btn"]
+}}
+```
+
+**何时使用多文件 vs 单文件：**
+- 简单计数器/表单 → 单文件 handlers.js + ui.json（向后兼容）
+- 数据库 CRUD、密码管理器、多模块工具 → 多文件 handlers/ + ui/
+- 单文件模式始终可用，多文件模式用于组织复杂代码
 
 **读取用户输入的正确方式：**
 - TextField value 用 { "path": "/fieldId" } 绑定
@@ -767,8 +921,18 @@ function onDecrementBtn(__inputs__, capability) {
 13. browser-js 运行时：顶层是否用 var（而非 const/let）声明状态变量？
 14. js 运行时：handlers.js 中没有 async/await/Promise？
 15. browser-js 运行时：storage/network/ai/threejs 调用是否使用了 await 或 .then()？
-16. 是否没有用 Markdown 代码块包裹输出？
-17. 分隔符是否严格为 === filename === 格式且独占一行？
-18. 是否输出了 === design-decision === 部分？
+16. 使用了 capability.db.* 时是否在 capabilities 中声明了 "database": {}？
+17. capability.db.run() 是否只包含单条 DDL 语句（CREATE TABLE/INDEX/VIEW, ALTER TABLE, DROP TABLE/INDEX）？
+18. capability.db.query() 是否只包含 SELECT 语句？
+19. capability.db.execute() 是否只包含 INSERT/UPDATE/DELETE/REPLACE 语句且无分号多语句？
+20. 使用了 capability.websearch.search 时是否在 capabilities 中声明了 "websearch": {}？
+21. websearch search limit 是否不超过 10？
+22. 使用了 capability.crypto.* 时是否在 capabilities 中声明了 "crypto": {}？
+23. capability.crypto.randomBytes(n) 的 n 是否 <= 1024？
+24. 多文件 Skill：所有 require() 路径是否正确且不含 / 前缀和 .. 穿越？
+25. 多文件 Skill：ui/ 中的 $ref 是否格式正确（./path/to/file.json#Key）且目标存在？
+26. 是否没有用 Markdown 代码块包裹输出？
+27. 分隔符是否严格为 === filename === 格式且独占一行？
+28. 是否输出了 === design-decision === 部分？
 
 只输出三个文件和一个 design-decision，不要任何额外内容。

@@ -110,5 +110,16 @@ Handler __inputs__: { "num1": "5" }
 - capability.os.notify(title, body) → void（需声明 os）
 - capability.network.fetch({url, method?, headers?, body?}) → {status, body}（需声明 network 且带 allowlist）
 - capability.ai.ask(prompt) → {status, body}（需声明 ai，用于 LLM 检索/搜索，不知道 API 地址时使用）
+- capability.db.run(sql) → void（需声明 database，DDL：CREATE TABLE/INDEX/VIEW）
+- capability.db.query(sql, [params]) → [{col: val, ...}]（需声明 database，SELECT 查询）
+- capability.db.execute(sql, [params]) → {changes: N}（需声明 database，INSERT/UPDATE/DELETE）
+- capability.db.transaction(fn) → void（需声明 database，事务包装）
+- capability.websearch.search(query, limit?) → {results: [{title, url, snippet, score}]}（需声明 websearch，limit 默认 5 最大 10）
+- capability.crypto.deriveKey(password, salt) → base64 key（需声明 crypto，PBKDF2 256-bit）
+- capability.crypto.encrypt(plaintext, key) → base64 ciphertext（需声明 crypto，AES-256-GCM）
+- capability.crypto.decrypt(ciphertext, key) → plaintext（需声明 crypto）
+- capability.crypto.hash(data) → hex string（需声明 crypto，SHA-256）
+- capability.crypto.randomBytes(n) → base64（需声明 crypto，上限 1024 字节）
+- capability.crypto.generatePassword(len) → string（需声明 crypto，安全随机密码）
 
 只输出三个文件和一个 design-decision，不要任何额外内容。

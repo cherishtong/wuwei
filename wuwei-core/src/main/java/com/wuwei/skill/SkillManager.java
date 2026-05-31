@@ -108,6 +108,30 @@ public class SkillManager {
             }
             return;
         }
+        // Clean up stale gen staging directories left from crashed/interrupted generations.
+        // new-XXXXXXXX-gen dirs: their skill.json has the real skill's ID, overwriting A2UI trees.
+        // new-XXXXXXXX dirs (without -gen): stale stub skills with self-matching IDs (harmless but clutter).
+        try (var staleEntries = Files.list(dir)) {
+            staleEntries.filter(Files::isDirectory).forEach(skillDir -> {
+                String name = skillDir.getFileName().toString();
+                boolean isGenDir = name.startsWith("new-") && name.matches("^new-[0-9a-f]{6,12}-gen$");
+                boolean isStubSkill = name.startsWith("new-") && name.matches("^new-[0-9a-f]{6,12}$");
+                if (isGenDir || isStubSkill) {
+                    try {
+                        try (var walk = Files.walk(skillDir)) {
+                            walk.sorted(java.util.Comparator.reverseOrder())
+                                .forEach(p -> { try { Files.delete(p); } catch (Exception ignored) {} });
+                        }
+                        System.out.println("[SkillManager] Cleaned up stale gen dir: " + name);
+                    } catch (Exception e) {
+                        System.out.println("[SkillManager] Failed to clean gen dir " + name + ": " + e.getMessage());
+                    }
+                }
+            });
+        } catch (Exception e) {
+            System.out.println("[SkillManager] Gen dir cleanup error: " + e.getMessage());
+        }
+
         try (var entries = Files.list(dir)) {
             entries.filter(Files::isDirectory).forEach(skillDir -> {
                 String skillId = skillDir.getFileName().toString();
@@ -163,6 +187,13 @@ public class SkillManager {
 
     private void checkAndReload(Path skillDir) {
         String skillId = skillDir.getFileName().toString();
+
+        // Skip gen staging directories — they contain skill.json with a different id
+        // and would overwrite real skill trees if loaded
+        if (skillId.startsWith("new-") && skillId.endsWith("-gen")) {
+            return;
+        }
+
         try {
             Path manifestPath = skillDir.resolve("skill.json");
             if (!Files.exists(manifestPath)) {
@@ -261,8 +292,7 @@ public class SkillManager {
 
     public LoadedSkill loadFromDirectory(Path skillDir) throws Exception {
         Path manifestPath = skillDir.resolve("skill.json");
-        Path uiPath = skillDir.resolve("genome").resolve("ui.json");
-        Path handlersPath = skillDir.resolve("genome").resolve("handlers.js");
+        Path genomeDir = skillDir.resolve("genome");
 
         if (!Files.exists(manifestPath)) {
             throw new IllegalArgumentException("Missing skill.json in " + skillDir);
@@ -270,26 +300,68 @@ public class SkillManager {
 
         SkillManifest manifest = mapper.readValue(manifestPath.toFile(), SkillManifest.class);
         String skillId = manifest.id();
-        log.info("Loading skill {} from {}", skillId, skillDir);
+        String dirName = skillDir.getFileName().toString();
 
-        String uiJson = Files.exists(uiPath)
-            ? Files.readString(uiPath)
-            : "{}";
-        String handlersJs = Files.exists(handlersPath)
-            ? Files.readString(handlersPath)
-            : "";
-
-        JsonNode uiTree = mapper.readTree(uiJson);
-
-        // W9: Restore from snapshot if version matches (crash recovery)
-        var snap = snapshotService.restore(skillId);
-        if (snap.isPresent() && snap.get().version().equals(manifest.version())) {
-            uiTree = snap.get().uiTree();
-            log.info("Snapshot restored for skill={} version={} reason={}",
-                skillId, snap.get().version(), snap.get().reason());
+        // Safety: reject gen staging directories whose manifest id would collide
+        // with a real skill. During startup, these overwrite the real skill's tree.
+        if (!dirName.equals(skillId) && dirName.startsWith("new-") && dirName.endsWith("-gen")) {
+            String msg = "Rejecting gen staging directory " + dirName
+                + " (manifest id=" + skillId + " would overwrite real skill tree)";
+            System.out.println("[loadFromDirectory] " + msg);
+            log.warn(msg);
+            throw new IllegalArgumentException(msg);
         }
 
-        SkillGenome genome = new SkillGenome(uiJson, handlersJs);
+        log.info("Loading skill {} from {}", skillId, skillDir);
+
+        // ── UI: try ui/ directory first, fall back to ui.json ──
+        Path uiDir = genomeDir.resolve("ui");
+        Path uiPath = genomeDir.resolve("ui.json");
+        String uiJson;
+        JsonNode uiTree;
+
+        if (Files.isDirectory(uiDir)) {
+            // Multi-fragment mode: resolve $ref from ui/index.json
+            uiTree = a2uiEngine.resolveUiRefs(uiDir);
+            uiJson = mapper.writeValueAsString(uiTree);
+            java.util.List<String> dfKeys = new java.util.ArrayList<>();
+            var dfIter = ((com.fasterxml.jackson.databind.node.ObjectNode)uiTree).fieldNames();
+            while (dfIter.hasNext()) dfKeys.add(dfIter.next());
+            System.out.println("[loadFromDirectory] " + skillId + " uiDir mode, tree fieldNames=" + dfKeys + " hasComponents=" + uiTree.has("components"));
+        } else if (Files.exists(uiPath)) {
+            uiJson = Files.readString(uiPath);
+            uiTree = mapper.readTree(uiJson);
+            System.out.println("[loadFromDirectory] " + skillId + " ui.json mode, uiJsonLen=" + uiJson.length() + " tree=" + uiTree.getClass().getSimpleName() + " hasComponents=" + uiTree.has("components"));
+        } else {
+            uiJson = "{}";
+            uiTree = mapper.readTree(uiJson);
+            System.out.println("[loadFromDirectory] " + skillId + " no UI file, defaulting to {}");
+        }
+
+        // ── Handlers: try handlers/ directory first, fall back to handlers.js ──
+        Path handlersDir = genomeDir.resolve("handlers");
+        Path handlersPath = genomeDir.resolve("handlers.js");
+        String handlersJs;
+        Map<String, String> moduleFiles = null;
+
+        if (Files.isDirectory(handlersDir)) {
+            // Multi-file mode: index.js is entry point, rest are modules
+            Map<String, String> files = walkJsFiles(handlersDir);
+            handlersJs = files.get("index.js");
+            if (handlersJs == null) {
+                throw new IllegalArgumentException("handlers/index.js not found in " + handlersDir);
+            }
+            moduleFiles = files;
+        } else if (Files.exists(handlersPath)) {
+            handlersJs = Files.readString(handlersPath);
+        } else {
+            handlersJs = "";
+        }
+
+        // Snapshot restore removed — all state lives on disk in the skill directory.
+        // Disk is the canonical source of truth, no need for recovery from SQLite.
+
+        SkillGenome genome = new SkillGenome(uiJson, handlersJs, moduleFiles);
 
         // Gate static audit
         try {
@@ -307,10 +379,8 @@ public class SkillManager {
 
         Object runtime;
         if ("browser-js".equals(manifest.runtime())) {
-            // Browser-js skills execute client-side — no GraalJS context needed
             runtime = new BrowserSkillRuntime(manifest, handlersJs);
         } else {
-            // Standard js runtime — GraalJS sandbox
             Consumer<List<Object>> flushPatches = patches -> {
                 List<Object> applied = a2uiEngine.applyPatches(skillId, patches);
                 if (!applied.isEmpty()) {
@@ -318,7 +388,18 @@ public class SkillManager {
                     eventBus.publish(new KernelEvent.A2uiPatch(skillId, tid, applied));
                 }
             };
-            runtime = runtimePool.create(manifest, handlersJs, capSet, flushPatches);
+            if (moduleFiles != null && !moduleFiles.isEmpty()) {
+                runtime = runtimePool.create(manifest, handlersJs, capSet, flushPatches, moduleFiles);
+            } else {
+                runtime = runtimePool.create(manifest, handlersJs, capSet, flushPatches);
+            }
+        }
+
+        // Guard: if handlers are empty and skill already has valid handlers, skip (file watcher race)
+        LoadedSkill existing = skills.get(skillId);
+        if (handlersJs.isBlank() && existing != null && existing.runtime() instanceof SkillRuntime) {
+            System.out.println("[loadFromDirectory] " + skillId + " skip empty-handler overwrite");
+            return existing;
         }
 
         // Register UI tree
@@ -330,6 +411,11 @@ public class SkillManager {
         LoadedSkill skill = LoadedSkill.create(manifest, runtime, uiTree);
         skills.put(skillId, skill);
         log.info("Skill loaded: {} v{} ({})", skillId, manifest.version(), manifest.runtime());
+
+        // Fire onInstall lifecycle hook (once, on first load)
+        if (runtime instanceof SkillRuntime sr) {
+            sr.callLifecycleHandler("onInstall");
+        }
         return skill;
     }
 
@@ -352,6 +438,18 @@ public class SkillManager {
         }
 
         JsonNode tree = a2uiEngine.getTree(skillId);
+        System.out.println("[activate] skillId=" + skillId + " tree=" + (tree != null ? tree.getClass().getSimpleName() : "null"));
+        if (tree != null && tree.isObject()) {
+            var obj = (com.fasterxml.jackson.databind.node.ObjectNode) tree;
+            java.util.List<String> keys = new java.util.ArrayList<>();
+            var iter = obj.fieldNames();
+            while (iter.hasNext()) keys.add(iter.next());
+            System.out.println("[activate] tree fieldNames=" + keys);
+            if (tree.has("components")) {
+                JsonNode comps = tree.get("components");
+                System.out.println("[activate] components type=" + comps.getNodeType() + " size=" + comps.size());
+            }
+        }
         skills.put(skillId, skill.withStatus(SkillStatus.RUNNING));
 
         String runtime = skill.manifest().runtime();
@@ -362,8 +460,13 @@ public class SkillManager {
             capabilities = skill.manifest().capabilities();
         }
 
+        // Convert JsonNode tree to Map so Jackson serializes it correctly
+        // (avoids potential JsonNode-in-Map serialization quirks)
+        @SuppressWarnings("unchecked")
+        Map<String, Object> uiMap = tree != null ? mapper.convertValue(tree, Map.class) : Map.of();
+        System.out.println("[activate] uiMap keys=" + uiMap.keySet() + " hasComponents=" + uiMap.containsKey("components"));
         eventBus.publish(new KernelEvent.SkillActivated(
-            skillId, skill.manifest().name(), threadId, tree, List.of(), runtime, handlersJs, capabilities));
+            skillId, skill.manifest().name(), threadId, uiMap, List.of(), runtime, handlersJs, capabilities));
 
         // Write skill-event to conversation history
         writeConvEvent(threadId, skillId, "已激活技能 **" + skill.manifest().name() + "**", skillId);
@@ -389,6 +492,11 @@ public class SkillManager {
 
         if (threadId != null && !threadId.isEmpty()) {
             skillThreadMap.remove(skillId);
+        }
+
+        // Fire onDeactivate lifecycle hook
+        if (skill.runtime() instanceof SkillRuntime sr) {
+            sr.callLifecycleHandler("onDeactivate");
         }
 
         // Mark as stopped but keep runtime alive for re-activation
@@ -551,6 +659,11 @@ public class SkillManager {
         skills.remove(skillId);
         capManager.cancelPendingGates(skillId);
 
+        // Fire onUninstall lifecycle hook (before runtime is closed)
+        if (runtimeObj instanceof SkillRuntime sr) {
+            sr.callLifecycleHandler("onUninstall");
+        }
+
         try {
             if (runtimeObj instanceof SkillRuntime sr) sr.close();
             else if (runtimeObj instanceof BrowserSkillRuntime bsr) bsr.close();
@@ -625,6 +738,31 @@ public class SkillManager {
         }
     }
 
+    // ── Multi-file helpers ────────────────────────────────────────────
+
+    /**
+     * Walk a handlers/ directory and return all .js files as a map of
+     * relative-path → source. Keys are relative to the handlers dir
+     * (e.g. "index.js", "lib/helpers.js", "features/crud.js").
+     */
+    private Map<String, String> walkJsFiles(Path handlersDir) throws Exception {
+        Map<String, String> files = new java.util.LinkedHashMap<>();
+        try (var stream = Files.walk(handlersDir)) {
+            stream
+                .filter(Files::isRegularFile)
+                .filter(f -> f.getFileName().toString().endsWith(".js"))
+                .forEach(f -> {
+                    try {
+                        String rel = handlersDir.relativize(f).toString()
+                            .replace('\\', '/');
+                        String source = Files.readString(f);
+                        files.put(rel, source);
+                    } catch (Exception ignored) {}
+                });
+        }
+        return files;
+    }
+
     // ── Queries ──────────────────────────────────────────────────────
 
     public LoadedSkill get(String skillId) {
@@ -638,8 +776,11 @@ public class SkillManager {
             String name = m.meta() != null
                 ? String.valueOf(m.meta().getOrDefault("name", id))
                 : id;
+            Map<String, Object> caps = m.capabilities() != null
+                ? m.capabilities()
+                : Map.of();
             result.add(new KernelEvent.SkillMeta(
-                id, name, skill.status().name().toLowerCase(), m.version()));
+                id, name, skill.status().name().toLowerCase(), m.version(), caps));
         });
         return result;
     }

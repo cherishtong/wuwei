@@ -18,5 +18,15 @@
     "interfaces": [
       "com.wuwei.llm.DriftAnalysisAgent"
     ]
+  },
+  {
+    "interfaces": [
+      "com.wuwei.llm.PlannerAgent"
+    ]
+  },
+  {
+    "interfaces": [
+      "com.wuwei.llm.SkillGenerateSyncAgent"
+    ]
   }
 ]

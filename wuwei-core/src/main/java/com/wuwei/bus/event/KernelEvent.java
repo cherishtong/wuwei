@@ -97,7 +97,8 @@ public sealed interface KernelEvent permits
 
     record SystemNotify(String title, String body) implements KernelEvent {}
 
-    record SkillMeta(String id, String name, String status, String version) {}
+    record SkillMeta(String id, String name, String status, String version,
+                     Map<String, Object> capabilities) {}
 
     record CapabilityProxyResult(
         String skillId,

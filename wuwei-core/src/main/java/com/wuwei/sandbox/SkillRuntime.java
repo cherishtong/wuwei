@@ -53,9 +53,12 @@ public class SkillRuntime implements AutoCloseable {
     private final Map<Integer, ScheduledFuture<?>> intervals = new ConcurrentHashMap<>();
     private final AtomicInteger timerIdCounter = new AtomicInteger(0);
 
+    private final Map<String, Value> moduleCache = new ConcurrentHashMap<>();
+
     public SkillRuntime(Engine engine, SkillManifest manifest,
                         String code, CapabilitySet capSet,
-                        Consumer<List<Object>> patchFlush) {
+                        Consumer<List<Object>> patchFlush,
+                        Map<String, String> moduleFiles) {
         this.skillId = manifest.id();
         this.capSet = capSet;
         this.patchFlush = patchFlush;
@@ -85,6 +88,9 @@ public class SkillRuntime implements AutoCloseable {
             .build();
 
         injectCapabilities(capSet);
+        if (moduleFiles != null && !moduleFiles.isEmpty()) {
+            injectRequire(moduleFiles);
+        }
         injectTimerApi();
         loadCode(code);
 
@@ -108,6 +114,48 @@ public class SkillRuntime implements AutoCloseable {
     private void injectCapabilities(CapabilitySet capSet) {
         Value bindings = ctx.getBindings("js");
         bindings.putMember("capability", capSet.toProxyObject());
+    }
+
+    // ── CommonJS require() ──────────────────────────────────────────
+
+    private void injectRequire(Map<String, String> moduleFiles) {
+        Value bindings = ctx.getBindings("js");
+
+        bindings.putMember("require", (ProxyExecutable) args -> {
+            String path = args[0].asString();
+            if (path.startsWith("/") || path.contains("..")) {
+                throw new RuntimeException("require: path not allowed: " + path);
+            }
+            String normalized = path;
+            if (normalized.startsWith("./")) normalized = normalized.substring(2);
+            if (!normalized.endsWith(".js")) normalized += ".js";
+
+            if (moduleCache.containsKey(normalized)) {
+                return moduleCache.get(normalized);
+            }
+
+            String source = moduleFiles.get(normalized);
+            if (source == null) {
+                // also try with handlers/ prefix
+                source = moduleFiles.get("handlers/" + normalized);
+            }
+            if (source == null) {
+                throw new RuntimeException("Module not found: " + path + " (resolved: " + normalized + ")");
+            }
+
+            String wrapped = "(function(module, exports, require) {\n" + source + "\n})";
+            try {
+                Value factory = ctx.eval("js", wrapped);
+                Value module = ctx.eval("js", "({exports: {}})");
+                Value exports = module.getMember("exports");
+                factory.execute(module, exports, bindings.getMember("require"));
+                Value result = module.getMember("exports");
+                moduleCache.put(normalized, result);
+                return result;
+            } catch (Exception e) {
+                throw new RuntimeException("Failed to load module " + path + ": " + e.getMessage(), e);
+            }
+        });
     }
 
     // ── Timer API ─────────────────────────────────────────────────
@@ -185,6 +233,23 @@ public class SkillRuntime implements AutoCloseable {
         } catch (Exception e) {
             log.error("Failed to load code for {}: {}", skillId, e.getMessage());
             throw new RuntimeException("Code load failed: " + e.getMessage(), e);
+        }
+    }
+
+    // ── Lifecycle hooks ──────────────────────────────────────────
+
+    /** Call a named lifecycle handler (onInstall, onDeactivate, etc.) synchronously. */
+    public void callLifecycleHandler(String handlerName) {
+        try {
+            Value bindings = ctx.getBindings("js");
+            Value handler = bindings.getMember(handlerName);
+            if (handler != null && handler.canExecute()) {
+                Value cap = bindings.getMember("capability");
+                handler.execute(cap);
+                System.out.println("[SkillRuntime] " + handlerName + " completed");
+            }
+        } catch (Exception e) {
+            System.out.println("[SkillRuntime] " + handlerName + " threw: " + e.getMessage());
         }
     }
 

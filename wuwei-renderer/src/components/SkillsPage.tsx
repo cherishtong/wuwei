@@ -75,10 +75,38 @@ interface SkillMeta {
   name: string;
   status: string;
   version: string;
+  capabilities: Record<string, unknown>;
+}
+
+const CAP_LABELS: Record<string, { label: string; icon: string }> = {
+  storage: { label: '存储', icon: '📦' },
+  network: { label: '网络', icon: '🌐' },
+  ai: { label: 'AI', icon: '🤖' },
+  file: { label: '文件', icon: '📁' },
+  os: { label: '系统', icon: '🖥' },
+  crypto: { label: '加密', icon: '🔐' },
+  database: { label: '数据库', icon: '🗄' },
+  websearch: { label: '搜索', icon: '🔍' },
+  canvas: { label: '画布', icon: '🎨' },
+  threejs: { label: '3D', icon: '🧊' },
+};
+
+function CapBadge({ cap }: { cap: string }) {
+  const info = CAP_LABELS[cap];
+  if (!info) return null;
+  return (
+    <span
+      className="inline-flex items-center gap-0.5 px-1 py-0 text-[10px] rounded border bg-background/60 text-muted-foreground"
+      title={info.label}
+    >
+      <span className="text-[10px] leading-none">{info.icon}</span>
+    </span>
+  );
 }
 
 interface SkillsPageProps {
   activeSkillId: string | null;
+  initDetail?: Record<string, unknown> | null;
   onOpenModelConfig: () => void;
 }
 
@@ -101,7 +129,7 @@ const statusLabel = (status: string) => {
   return map[status] || status;
 };
 
-export function SkillsPage({ activeSkillId, onOpenModelConfig }: SkillsPageProps) {
+export function SkillsPage({ activeSkillId, initDetail, onOpenModelConfig }: SkillsPageProps) {
   const [skills, setSkills] = useState<SkillMeta[]>([]);
   const [viewMode, setViewMode] = useState<ViewMode>('list');
   const { resolved: theme } = useTheme();
@@ -228,7 +256,10 @@ export function SkillsPage({ activeSkillId, onOpenModelConfig }: SkillsPageProps
                       >
                         <div className="flex items-center gap-2">
                           <span className={`w-2 h-2 rounded-full flex-shrink-0 ${statusDot(s.status)}`} />
-                          <span className="text-sm font-medium truncate">{s.name}</span>
+                          <span className="text-sm font-medium truncate flex-1">{s.name}</span>
+                          {s.capabilities && Object.keys(s.capabilities).filter(c => c !== 'ui' && c !== 'permission').slice(0, 3).map(c => (
+                            <CapBadge key={c} cap={c} />
+                          ))}
                         </div>
                       </button>
                     );
@@ -240,9 +271,11 @@ export function SkillsPage({ activeSkillId, onOpenModelConfig }: SkillsPageProps
               <div className="h-full flex flex-col">
                 <SkillPanel
                   skillId={activeSkill?.id}
+                  initDetail={initDetail}
                   onDeactivate={activeSkill ? () => kernel.deactivateSkill(activeSkill.id) : undefined}
                   version={activeSkill?.version}
                   status={activeSkill?.status}
+                  capabilities={activeSkill?.capabilities}
                   placeholder={
                     <div className="text-center space-y-3">
                       <div className="w-16 h-16 mx-auto rounded-2xl bg-muted flex items-center justify-center">
@@ -266,9 +299,11 @@ export function SkillsPage({ activeSkillId, onOpenModelConfig }: SkillsPageProps
             <div className="flex-1 min-h-0 flex flex-col">
               <SkillPanel
                 skillId={activeSkill.id}
+                initDetail={initDetail}
                 onDeactivate={() => kernel.deactivateSkill(activeSkill.id)}
                 version={activeSkill.version}
                 status={activeSkill.status}
+                capabilities={activeSkill.capabilities}
               />
             </div>
           )}
@@ -414,6 +449,13 @@ export function SkillsPage({ activeSkillId, onOpenModelConfig }: SkillsPageProps
                                 {statusLabel(s.status)}
                               </span>
                             </div>
+                            {s.capabilities && Object.keys(s.capabilities).filter(c => c !== 'ui' && c !== 'permission').length > 0 && (
+                              <div className="flex items-center justify-center gap-1 mt-1.5">
+                                {Object.keys(s.capabilities).filter(c => c !== 'ui' && c !== 'permission').slice(0, 4).map(c => (
+                                  <CapBadge key={c} cap={c} />
+                                ))}
+                              </div>
+                            )}
                           </div>
                         </div>
                       );

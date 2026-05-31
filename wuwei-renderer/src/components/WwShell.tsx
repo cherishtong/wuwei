@@ -176,6 +176,7 @@ export function WwShell() {
           {activeTab === 'skills' && (
             <SkillsPage
               activeSkillId={activeSkillId}
+              initDetail={globalSkillDetail}
               onOpenModelConfig={() => setModelConfigOpen(true)}
             />
           )}

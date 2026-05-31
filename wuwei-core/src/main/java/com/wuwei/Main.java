@@ -8,8 +8,11 @@ import com.wuwei.bus.MessageRouter;
 import com.wuwei.bus.WsServer;
 import com.wuwei.capability.AiCapability;
 import com.wuwei.capability.CapabilityManager;
+import com.wuwei.capability.CryptoCapability;
+import com.wuwei.capability.DatabaseCapability;
 import com.wuwei.capability.FileCapability;
 import com.wuwei.capability.NetworkCapability;
+import com.wuwei.capability.WebSearchCapability;
 import com.wuwei.gate.AstAuditor;
 import com.wuwei.gate.EcosystemGuardian;
 import com.wuwei.llm.AgentFactory;
@@ -93,8 +96,12 @@ public class Main {
         System.out.println("[kernel] LLM service initialized (LangChain4j AiServices + ChatMemory)");
 
         AiCapability aiCap = new AiCapability(agentFactory, storeService);
+        CryptoCapability cryptoCap = new CryptoCapability();
+        DatabaseCapability databaseCap = new DatabaseCapability();
+        WebSearchCapability webSearchCap = new WebSearchCapability(storeService, mapper);
 
-        CapabilityManager capManager = new CapabilityManager(stateStore, networkCap, fileCap, aiCap, eventBus);
+        CapabilityManager capManager = new CapabilityManager(stateStore, networkCap, fileCap,
+            aiCap, cryptoCap, databaseCap, webSearchCap, eventBus);
         RuntimePool runtimePool = new RuntimePool();
         AstAuditor astAuditor = new AstAuditor(mapper);
         EcosystemGuardian guardian = new EcosystemGuardian(eventBus);

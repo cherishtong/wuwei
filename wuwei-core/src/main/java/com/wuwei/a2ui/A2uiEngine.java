@@ -8,9 +8,14 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -32,7 +37,83 @@ public class A2uiEngine {
         this.mapper = mapper;
     }
 
+    /**
+     * Resolve $ref fragments in a UI tree from a ui/ directory.
+     * Walks the entire JSON tree, replacing {"$ref": "./components/form.json#Form"}
+     * with the actual subtree from the referenced file + key.
+     */
+    public JsonNode resolveUiRefs(Path uiDir) throws IOException {
+        Path indexJson = uiDir.resolve("index.json");
+        if (!Files.exists(indexJson)) {
+            throw new IOException("ui/index.json not found in " + uiDir);
+        }
+        JsonNode tree = mapper.readTree(indexJson.toFile());
+        return resolveRefs(tree, uiDir, new HashSet<>(), 0);
+    }
+
+    private JsonNode resolveRefs(JsonNode node, Path uiDir, Set<String> stack, int depth)
+            throws IOException {
+        if (depth > 10) {
+            throw new IOException("UI $ref depth limit exceeded (circular reference?)");
+        }
+        if (node.isObject()) {
+            ObjectNode obj = (ObjectNode) node;
+            if (obj.has("$ref") && obj.size() == 1) {
+                String ref = obj.get("$ref").asText();
+                // Format: "./path/to/file.json#Key"
+                int hash = ref.indexOf('#');
+                if (hash == -1) {
+                    throw new IOException("Invalid $ref format (missing #Key): " + ref);
+                }
+                String filePath = ref.substring(0, hash);
+                String key = ref.substring(hash + 1);
+                Path resolvedPath = uiDir.resolve(filePath).normalize();
+                if (!resolvedPath.startsWith(uiDir)) {
+                    throw new IOException("$ref path traversal denied: " + filePath);
+                }
+                if (!Files.exists(resolvedPath)) {
+                    throw new IOException("$ref target not found: " + filePath);
+                }
+                String refKey = resolvedPath.toString() + "#" + key;
+                if (!stack.add(refKey)) {
+                    throw new IOException("Circular $ref detected: " + refKey);
+                }
+                JsonNode fragment = mapper.readTree(resolvedPath.toFile());
+                if (!fragment.has(key)) {
+                    throw new IOException("$ref key '" + key + "' not found in " + filePath);
+                }
+                JsonNode resolvedNode = resolveRefs(fragment.get(key), uiDir, stack, depth + 1);
+                stack.remove(refKey);
+                return resolvedNode;
+            }
+            // Recursively process all fields
+            ObjectNode result = mapper.createObjectNode();
+            var iter = obj.fields();
+            while (iter.hasNext()) {
+                var entry = iter.next();
+                result.set(entry.getKey(), resolveRefs(entry.getValue(), uiDir, stack, depth));
+            }
+            return result;
+        } else if (node.isArray()) {
+            ArrayNode arr = (ArrayNode) node;
+            ArrayNode result = mapper.createArrayNode();
+            for (JsonNode item : arr) {
+                result.add(resolveRefs(item, uiDir, stack, depth));
+            }
+            return result;
+        }
+        return node;
+    }
+
     public void register(String skillId, JsonNode uiTree) {
+        // Don't overwrite a valid tree with an empty one (file watcher race condition)
+        if (uiTree == null || !uiTree.has("components") || uiTree.get("components").size() == 0) {
+            JsonNode existing = trees.get(skillId);
+            if (existing != null && existing.has("components") && existing.get("components").size() > 0) {
+                log.info("A2uiEngine skip empty overwrite for: {}", skillId);
+                return;
+            }
+        }
         trees.put(skillId, uiTree);
         log.info("A2uiEngine registered: {}", skillId);
     }

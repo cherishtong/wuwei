@@ -6,6 +6,7 @@ import com.wuwei.bus.event.KernelEvent;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -77,8 +78,8 @@ class EventBusTest {
     @Test
     void skillList_withItemsShouldSerialize() throws Exception {
         var meta = List.of(
-            new KernelEvent.SkillMeta("timer", "番茄钟", "running", "1.0.0"),
-            new KernelEvent.SkillMeta("weather", "天气", "stopped", "2.0.0")
+            new KernelEvent.SkillMeta("timer", "番茄钟", "running", "1.0.0", Map.of()),
+            new KernelEvent.SkillMeta("weather", "天气", "stopped", "2.0.0", Map.of("ui", Map.of()))
         );
         var event = new KernelEvent.SkillList(meta);
         String json = serialize(event);

@@ -30,6 +30,22 @@ export interface BrowserCapability {
   os?: {
     notify(title: string, body: string): Promise<void>;
   };
+  crypto?: {
+    encrypt(plaintext: string, key: string): Promise<string>;
+    decrypt(ciphertext: string, key: string): Promise<string>;
+    hash(data: string): Promise<string>;
+    deriveKey(password: string, salt: string): Promise<string>;
+    randomBytes(n: number): Promise<string>;
+    generatePassword(len: number): Promise<string>;
+  };
+  db?: {
+    run(sql: string): Promise<void>;
+    query(sql: string, params?: unknown[]): Promise<Record<string, unknown>[]>;
+    execute(sql: string, params?: unknown[]): Promise<{ changes: number }>;
+  };
+  websearch?: {
+    search(query: string, opts?: { limit?: number }): Promise<{ results: { title: string; url: string; snippet: string; score?: number }[]; answer: string }>;
+  };
   canvas?: {
     render(canvasId: string, commands: Record<string, unknown>[]): void;
   };

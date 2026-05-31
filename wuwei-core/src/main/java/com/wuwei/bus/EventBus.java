@@ -161,7 +161,13 @@ public class EventBus {
                     log.warn("Failed to read component {}: {}", rc.getName(), e.getMessage());
                 }
             }
-            return mapper.writeValueAsString(map);
+            String json = mapper.writeValueAsString(map);
+            if (event instanceof KernelEvent.SkillActivated) {
+                int uiIdx = json.indexOf("\"ui\":");
+                String uiSnippet = uiIdx >= 0 ? json.substring(uiIdx, Math.min(json.length(), uiIdx + 120)) : "NOT FOUND";
+                System.out.println("[EventBus.serialize] SkillActivated ui: " + uiSnippet);
+            }
+            return json;
         } catch (Exception e) {
             throw new RuntimeException("Event serialization failed", e);
         }

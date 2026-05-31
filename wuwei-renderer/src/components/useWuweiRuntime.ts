@@ -10,8 +10,11 @@ export interface DisplayMessage {
   time?: string;
   isGenerationCard?: boolean;
   steps?: StepState[];
+  log?: { time: string; action: string; path: string; detail?: string }[];
   allDone?: boolean;
   skillId?: string | null;
+  error?: string | null;
+  fileProgress?: string[];
 }
 
 export interface StepState {
@@ -49,8 +52,10 @@ export function useWuweiRuntime({ messages, isRunning, onSend }: WuweiRuntimeOpt
             type: 'data-generation-card' as `data-${string}`,
             data: {
               steps: cardSteps,
+              log: msg.log ?? [],
               allDone: cardDone,
               skillId: msg.skillId ?? null,
+              error: msg.error ?? null,
             },
           },
         ],

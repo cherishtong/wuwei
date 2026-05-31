@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
   AssistantRuntimeProvider,
   ThreadPrimitive,
@@ -58,101 +58,72 @@ interface WuweiChatProps {
 // Custom GenerationCard data component registered with makeAssistantDataUI
 // ────────────────────────────────────────────────────────────────────
 
-const GenerationCardComponent: DataMessagePartComponent<{
-  steps: StepState[];
-  allDone: boolean;
-  skillId?: string | null;
-}> = ({ data }) => {
-  const { steps, allDone, skillId } = data;
-  const { resolved: theme } = useTheme();
-  const isDark = theme === 'dark';
 
-  const cardAccent = 'hsl(var(--primary))';
+	const ICON: Record<string, string> = { createFile: '📄', updateFile: '✏️', readFile: '📖', deleteFile: '🗑️', listFiles: '📂', getProgress: '📊', validate: '🔍', testRun: '🧪', done: '✅' };
 
-  if (!steps || steps.length === 0) return null;
+	const GenerationCardComponent: DataMessagePartComponent<{
+	  steps?: StepState[];
+	  log?: { time: string; action: string; path: string; detail?: string }[];
+	  allDone?: boolean;
+	  skillId?: string | null;
+	  error?: string | null;
+	}> = ({ data }) => {
+	  const { steps, log, allDone, skillId, error } = data;
+	  const { resolved: theme } = useTheme();
+	  const isDark = theme === 'dark';
+	  const scrollRef = useRef<HTMLDivElement>(null);
+	  useEffect(() => { if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight; }, [log]);
+	  const cardAccent = 'hsl(var(--primary))';
+	  const hasError = !!error, isDone = !!allDone, hasLog = log && log.length > 0;
+	  const latestPhase = steps && steps.length > 0 ? steps[steps.length - 1] : null;
 
-  return (
-    <div
-      className="relative flex flex-col gap-3 rounded-xl text-sm overflow-hidden"
-      style={{
-        background: 'hsl(var(--card))',
-        minWidth: 260,
-        boxShadow: isDark
-          ? '0px -16px 24px 0px rgba(255,255,255,0.06) inset'
-          : '0px -2px 8px 0px rgba(0,0,0,0.03) inset',
+	  return (
+	    <div className="relative flex flex-col gap-2 rounded-xl text-sm overflow-hidden p-4"
+	      style={{ background: 'hsl(var(--card))', minWidth: 260, maxWidth: 360,
+	        boxShadow: isDark ? '0px -16px 24px 0px rgba(255,255,255,0.06) inset' : '0px -2px 8px 0px rgba(0,0,0,0.03) inset' }}>
+	      <div className="flex items-center gap-2">
+	        {isDone ? <span className="text-lg">✅</span> : hasError ? <span className="text-lg">❌</span> :
+	          <div className="w-4 h-4 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />}
+	        <span className="font-semibold text-card-foreground" style={{ fontSize: '0.95rem' }}>
+	          {isDone ? '生成完成' : hasError ? '生成失败' : latestPhase?.label || '正在生成技能...'}
+	        </span>
+	      </div>
+	      {hasError && <div className="text-xs text-red-500 bg-red-500/10 rounded px-2 py-1 font-mono break-all">{error}</div>}
+	      {steps && steps.length > 0 && (
+	        <div className="flex flex-wrap gap-1">
+	          {steps.map((s: StepState) => (
+	            <span key={s.key} className="text-[10px] px-1.5 py-0.5 rounded-full font-medium"
+	              style={{ background: s.status === 'done' ? 'hsl(120,50%,15%)' : s.status === 'error' ? 'hsl(0,50%,15%)' : s.status === 'in_progress' ? 'hsl(var(--primary)/0.15)' : 'hsl(var(--muted)/0.1)',
+	                color: s.status === 'done' ? 'hsl(120,60%,50%)' : s.status === 'error' ? 'hsl(0,70%,50%)' : s.status === 'in_progress' ? 'hsl(var(--primary))' : 'hsl(var(--muted-foreground))' }}>
+	              {(s.status === 'done' ? '✓' : s.status === 'error' ? '✗' : '○') + ' ' + s.label}
+	            </span>
+	          ))}
+	        </div>
+	      )}
+	      {hasLog && (<>
+	        <hr style={{ borderColor: 'hsl(var(--border))', opacity: 0.3 }} />
+	        <div ref={scrollRef} className="flex flex-col gap-0.5 max-h-48 overflow-y-auto font-mono text-[11px]">
+	          {log!.map((entry, i) => (
+	            <div key={i} className="flex items-start gap-1.5 leading-relaxed">
+	              <span className="flex-shrink-0 opacity-60" style={{ color: 'hsl(var(--muted-foreground))' }}>{entry.time}</span>
+	              <span className="flex-shrink-0 w-4 text-center">{ICON[entry.action] || '•'}</span>
+	              <span className="opacity-70" style={{ color: 'hsl(var(--muted-foreground))' }}>{entry.action}</span>
+	              {entry.path && <span className="truncate" style={{ color: 'hsl(var(--foreground))' }}>{entry.path}</span>}
+	            </div>
+	          ))}
+	        </div>
+	      </>)}
+	      {isDone && skillId && (
+	        <button className="mt-1 w-full py-2 rounded-lg text-sm font-medium transition-colors"
+	          style={{ background: cardAccent, color: '#fff' }}
+	          onClick={() => window.dispatchEvent(new CustomEvent('view-active-skill', { detail: { skillId } }))}>
+	          使用技能
+	        </button>
+	      )}
+	    </div>
+	  );
+	};
 
-      }}
-    >
-      <div className="relative z-10">
-        <span
-          className="font-semibold"
-          style={{ fontSize: '1rem', color: 'hsl(var(--card-foreground))' }}
-        >
-          {allDone ? '生成完成' : '正在生成'}
-        </span>
-        <p
-          style={{
-            marginTop: '0.25rem',
-            fontSize: '0.75rem',
-            color: 'hsl(var(--muted-foreground))',
-          }}
-        >
-          {allDone ? '技能已就绪，可以查看和使用' : '正在通过 AI 创建你的技能...'}
-        </p>
-      </div>
-
-      <hr
-        style={{
-          width: '100%',
-          height: '0.1rem',
-          background: 'hsl(var(--border))',
-          border: 'none',
-          position: 'relative',
-          zIndex: 10,
-        }}
-      />
-
-      <ul className="relative z-10 flex flex-col gap-2">
-        {steps.map((s: StepState) => (
-          <li key={s.key} className="flex items-center gap-2">
-            <span
-              style={{
-                fontSize: '0.75rem',
-                color:
-                  s.status === 'done'
-                    ? 'hsl(var(--muted-foreground))'
-                    : s.status === 'in_progress'
-                      ? 'hsl(var(--card-foreground))'
-                      : s.status === 'error'
-                        ? 'hsl(0, 80%, 60%)'
-                        : 'hsl(var(--muted-foreground) / 0.4)',
-              }}
-            >
-              {s.label}
-            </span>
-          </li>
-        ))}
-      </ul>
-
-      {allDone && skillId && (
-        <button
-          className="relative z-10 mt-1 w-full py-2 rounded-lg text-sm font-medium transition-colors"
-          style={{
-            background: cardAccent,
-            color: '#fff',
-          }}
-          onClick={() => {
-            window.dispatchEvent(
-              new CustomEvent('view-active-skill', { detail: { skillId } }),
-            );
-          }}
-        >
-          使用技能
-        </button>
-      )}
-    </div>
-  );
-};
 
 const GenCardUI = makeAssistantDataUI({
   name: 'generation-card',
@@ -268,17 +239,20 @@ export function WuweiChat({
         items.push({
           id: msg.id, role: 'user', content: msg.content, time: msg.time,
         });
-      } else if (msg.msgType === 'generation' && msg.steps) {
-        const allDone = msg.allDone ?? msg.steps.every(s => s.status === 'done');
-        if (!allDone) running = true;
+      } else if (msg.msgType === 'generation') {
+        const allDone = msg.allDone ?? false;
+        const hasError = !!msg.error;
+        if (!allDone && !hasError) running = true;
         items.push({
           id: msg.id,
           role: 'assistant',
           content: '',
           isGenerationCard: true,
-          steps: msg.steps,
+          steps: msg.steps ?? [],
+          log: msg.log ?? [],
           allDone,
           skillId: msg.skillId ?? null,
+          error: msg.error ?? null,
         });
       } else if (msg.role === 'assistant' || msg.role === 'system') {
         items.push({

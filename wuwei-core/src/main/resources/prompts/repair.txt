@@ -207,4 +207,40 @@
 - Table 缺少 columns 或 rows 属性 → 必须同时提供
 - columns 中缺少 title 或 key → 补充完整
 
+### DB_SQL_INJECTION
+- SQL 语句包含多个分号分隔的语句 → 改为单语句
+- SQL 使用了禁止的关键词（PRAGMA、ATTACH、DETACH、VACUUM）→ 移除这些语句，用标准 SQL 代替
+- SQL 不是以允许的 DDL（CREATE TABLE/INDEX/VIEW, ALTER TABLE, DROP TABLE/INDEX）或 DML（SELECT/INSERT/UPDATE/DELETE/REPLACE）开头 → 修正 SQL 语句
+- 注意：capability.db.run() 仅允许 DDL 单语句，capability.db.query() 仅允许 SELECT，capability.db.execute() 仅允许 INSERT/UPDATE/DELETE/REPLACE
+
+### DB_SIZE_LIMIT
+- 数据库文件超过 100MB 限制 → 减少数据量，删除不必要的记录，或优化表结构
+- 如果需要存储大量数据，考虑用 capability.file 代替
+
+### DB_QUERY_TIMEOUT
+- SQL 查询超过 5 秒超时 → 添加索引、优化查询条件、减少返回行数
+- 对于复杂查询，拆分为多次简单查询
+
+### CRYPTO_PARAM_TOO_LARGE
+- capability.crypto.randomBytes(n) 的 n 超过 1024 → 改为 1024 或更小的值
+- 注意：randomBytes 上限为 1024 字节
+
+### MODULE_NOT_FOUND
+- require('./xxx') 路径找不到对应的 .js 文件 → 检查文件路径是否正确，确保模块文件存在于 handlers/ 目录下
+- 路径不能以 / 开头，不能包含 ..（路径穿越禁止）
+- 确保模块文件名以 .js 结尾（可省略，自动补全）
+
+### CIRCULAR_REF
+- UI $ref 中存在循环引用 → 检查 ui/ 中的 $ref 链，打破循环
+- 例如 A → B → A 的引用链是不允许的
+
+### MISSING_DATABASE_CAPABILITY
+- 使用了 capability.db.run/query/execute/transaction 但 capabilities 中没有声明 database → 添加 "database": {}
+
+### MISSING_WEBSEARCH_CAPABILITY
+- 使用了 capability.websearch.search 但 capabilities 中没有声明 websearch → 添加 "websearch": {}
+
+### MISSING_CRYPTO_CAPABILITY
+- 使用了 capability.crypto.* 但 capabilities 中没有声明 crypto → 添加 "crypto": {}
+
 只输出修复后的三个文件和一个 design-decision，不要任何额外内容。

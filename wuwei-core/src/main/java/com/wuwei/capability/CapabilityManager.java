@@ -28,6 +28,9 @@ public class CapabilityManager {
     private final NetworkCapability networkCap;
     private final FileCapability fileCap;
     private final AiCapability aiCap;
+    private final CryptoCapability cryptoCap;
+    private final DatabaseCapability databaseCap;
+    private final WebSearchCapability webSearchCap;
     private final EventBus eventBus;
 
     /** Pending gate requests: key = "skillId:capName", value = CompletableFuture to complete */
@@ -40,11 +43,17 @@ public class CapabilityManager {
     private final ConcurrentHashMap<String, String> skillThreadMap = new ConcurrentHashMap<>();
 
     public CapabilityManager(SkillStateStore stateStore, NetworkCapability networkCap,
-                             FileCapability fileCap, AiCapability aiCap, EventBus eventBus) {
+                             FileCapability fileCap, AiCapability aiCap,
+                             CryptoCapability cryptoCap, DatabaseCapability databaseCap,
+                             WebSearchCapability webSearchCap,
+                             EventBus eventBus) {
         this.stateStore = stateStore;
         this.networkCap = networkCap;
         this.fileCap = fileCap;
         this.aiCap = aiCap;
+        this.cryptoCap = cryptoCap;
+        this.databaseCap = databaseCap;
+        this.webSearchCap = webSearchCap;
         this.eventBus = eventBus;
     }
 
@@ -53,7 +62,8 @@ public class CapabilityManager {
      * potential runtime injection.
      */
     public CapabilitySet inject(SkillManifest manifest) {
-        CapabilitySet capSet = CapabilitySet.build(manifest, stateStore, networkCap, fileCap, aiCap, eventBus, this);
+        CapabilitySet capSet = CapabilitySet.build(manifest, stateStore, networkCap, fileCap,
+            aiCap, cryptoCap, databaseCap, webSearchCap, eventBus, this);
         activeCapSets.put(manifest.id(), capSet);
         return capSet;
     }
@@ -182,6 +192,9 @@ public class CapabilityManager {
                 case "ai" -> executeAiProxy(skillId, method, args);
                 case "file" -> executeFileProxy(skillId, method, args);
                 case "os" -> executeOsProxy(method, args);
+                case "crypto" -> cryptoCap.executeProxy(method, args);
+                case "db" -> databaseCap.executeProxy(skillId, method, args);
+                case "websearch" -> webSearchCap.executeProxy(skillId, method, args);
                 default -> Map.of("error", "Unknown capability: " + capName);
             };
         } catch (Exception e) {

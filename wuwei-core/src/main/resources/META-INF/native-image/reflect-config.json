@@ -182,6 +182,24 @@
     "allDeclaredFields": true
   },
   {
+    "name": "com.wuwei.llm.SkillFileTools",
+    "allDeclaredConstructors": true,
+    "allPublicConstructors": true,
+    "allDeclaredMethods": true,
+    "allPublicMethods": true
+  },
+  {
+    "name": "com.wuwei.llm.PlannerAgent",
+    "allDeclaredConstructors": true,
+    "allPublicConstructors": true,
+    "allDeclaredMethods": true,
+    "allPublicMethods": true
+  },
+  {
+    "name": "dev.langchain4j.agent.tool.Tool",
+    "allDeclaredMethods": true
+  },
+  {
     "name": "java.lang.reflect.RecordComponent",
     "allDeclaredConstructors": true,
     "allPublicMethods": true

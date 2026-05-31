@@ -24,6 +24,8 @@ interface SkillPanelProps {
   version?: string;
   /** Optional status for the dot color */
   status?: string;
+  /** Optional capability names to show as badges */
+  capabilities?: Record<string, unknown>;
 }
 
 function statusDotClass(status?: string) {
@@ -44,6 +46,7 @@ export function SkillPanel({
   showHeader = true,
   version,
   status,
+  capabilities,
 }: SkillPanelProps) {
   const hasSkill = !!skillId;
   const displayName = (initDetail?.skillName as string) || skillId || '';
@@ -67,6 +70,11 @@ export function SkillPanel({
               v{version}
             </span>
           )}
+          {capabilities && Object.keys(capabilities).filter(c => c !== 'ui' && c !== 'permission').map(c => (
+            <span key={c} className="inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] text-muted-foreground" title={c}>
+              {c}
+            </span>
+          ))}
           <div className="ml-auto flex items-center gap-0.5">
             <button
               className="p-1 rounded hover:bg-accent transition-colors text-muted-foreground hover:text-foreground flex-shrink-0"
@@ -94,13 +102,12 @@ export function SkillPanel({
         </div>
       )}
 
-      {/* WwWorkspace — always mounted to catch events; hidden when no skill */}
-      <div
-        className="flex-1 min-h-0 overflow-auto"
-        style={{ display: hasSkill ? undefined : 'none', padding: hasSkill ? 20 : undefined }}
-      >
-        <WwWorkspace activeThreadId={activeThreadId} initDetail={initDetail} />
-      </div>
+      {/* WwWorkspace — conditionally rendered to ensure clean mount on each activation */}
+      {hasSkill && (
+        <div className="flex-1 min-h-0 overflow-auto" style={{ padding: 20 }}>
+          <WwWorkspace key={skillId ?? 'no-skill'} activeThreadId={activeThreadId} initDetail={initDetail} />
+        </div>
+      )}
 
       {/* Placeholder */}
       {!hasSkill && placeholder && (
