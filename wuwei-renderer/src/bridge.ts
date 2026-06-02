@@ -57,6 +57,10 @@ export function initBridge() {
     } else if (msg.type === 'skill-deactivated' && msg.threadId) {
       conversationStore.updateActiveSkillSilent(msg.threadId as string, null);
     }
+    // event-ack may carry patches from the kernel — dispatch them too
+    if (msg.type === 'event-ack' && msg.patches && Array.isArray(msg.patches) && msg.patches.length > 0) {
+      dispatch('a2ui-patch', { skillId: msg.skillId, threadId: msg.threadId, patches: msg.patches });
+    }
   });
 
   // ns:sys — system state

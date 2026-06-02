@@ -1,13 +1,14 @@
 import { useState, useEffect, useCallback } from 'react';
 import { z } from 'zod';
 import { createComponentImplementation } from '@a2ui/react/v0_9';
-import { Pagination as ShadcnPagination, PaginationContent, PaginationItem, PaginationLink, PaginationPrevious, PaginationNext, PaginationEllipsis } from '@/wv-components/ui/pagination';
+import { PaginationContent, PaginationItem, PaginationLink, PaginationPrevious, PaginationNext, PaginationEllipsis } from '@/wv-components/ui/pagination';
 
 const PaginationApi = {
   name: 'Pagination',
   schema: z.object({
     currentPage: z.union([z.number(), z.object({ path: z.string() })]).default(1).describe('Current page number or DataModel path binding.'),
     totalPages: z.number().describe('The total number of pages.'),
+    totalItems: z.number().optional().describe('Total number of items (for display).'),
     action: z.object({
       event: z.object({
         name: z.string().describe('The event name dispatched to the skill handler when page changes.'),
@@ -41,6 +42,7 @@ function resolveBinding(value: unknown, dataContext: any, fallback: number): num
 
 function PaginationComponent({ props, context }: { props: Record<string, unknown> & { setValue?: (val: number) => void }; buildChild: (id: string, basePath?: string) => React.ReactNode; context: any }) {
   const total = (props.totalPages as number) || 1;
+  const totalItems = typeof props.totalItems === 'number' ? props.totalItems : undefined;
   const resolved = resolveBinding(props.currentPage, context?.dataContext, 1);
   const [page, setPage] = useState(resolved);
 
@@ -61,30 +63,37 @@ function PaginationComponent({ props, context }: { props: Record<string, unknown
     }
   }, [total, props, context]);
 
-  if (total <= 1) return null;
+  if (total <= 1 && totalItems == null) return null;
+
+  const infoText = totalItems != null
+    ? `共 ${totalItems} 条 / ${total} 页`
+    : `共 ${total} 页`;
 
   return (
-    <ShadcnPagination>
-      <PaginationContent>
-        <PaginationItem>
-          <PaginationPrevious onClick={() => goTo(page - 1)} />
-        </PaginationItem>
-        {getPageNumbers(page, total).map((p, i) => (
-          <PaginationItem key={i}>
-            {p === 'ellipsis' ? (
-              <PaginationEllipsis />
-            ) : (
-              <PaginationLink isActive={p === page} onClick={() => goTo(p)}>
-                {p}
-              </PaginationLink>
-            )}
-          </PaginationItem>
-        ))}
-        <PaginationItem>
-          <PaginationNext onClick={() => goTo(page + 1)} />
-        </PaginationItem>
-      </PaginationContent>
-    </ShadcnPagination>
+    <div className="flex items-center gap-2">
+      <span className="text-sm text-muted-foreground whitespace-nowrap shrink-0">{infoText}</span>
+      <nav role="navigation" aria-label="pagination" className="flex flex-1 justify-end">
+        <ul className="flex flex-row items-center gap-1">
+          <li>
+            <PaginationPrevious onClick={() => goTo(page - 1)} />
+          </li>
+          {getPageNumbers(page, total).map((p, i) => (
+            <li key={i}>
+              {p === 'ellipsis' ? (
+                <PaginationEllipsis />
+              ) : (
+                <PaginationLink isActive={p === page} onClick={() => goTo(p)}>
+                  {p}
+                </PaginationLink>
+              )}
+            </li>
+          ))}
+          <li>
+            <PaginationNext onClick={() => goTo(page + 1)} />
+          </li>
+        </ul>
+      </nav>
+    </div>
   );
 }
 

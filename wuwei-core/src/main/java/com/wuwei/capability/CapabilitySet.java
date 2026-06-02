@@ -241,17 +241,22 @@ public class CapabilitySet {
                     case "get" -> (ProxyExecutable) args -> {
                         String id = args[0].asString();
                         String prop = args[1].asString();
-                        // Return cached value (set initially from onInit or DataModel), or empty string
                         Object cached = uiValueCache.get(id + "." + prop);
                         return cached != null ? cached : "";
+                    };
+                    case "render" -> (ProxyExecutable) args -> {
+                        // A2UI surfaceUpdate: replace entire component tree (page switching)
+                        Object rawComponents = unwrapValue(args[0]);
+                        pendingPatches.add(Map.of("surfaceUpdate", Map.of("components", rawComponents)));
+                        return null;
                     };
                     default -> null;
                 };
             }
             @Override
-            public boolean hasMember(String key) { return Set.of("get", "set").contains(key); }
+            public boolean hasMember(String key) { return Set.of("get", "set", "render").contains(key); }
             @Override
-            public Set<String> getMemberKeys() { return Set.of("get", "set"); }
+            public Set<String> getMemberKeys() { return Set.of("get", "set", "render"); }
             @Override
             public void putMember(String key, Value value) {}
             @Override
@@ -427,6 +432,14 @@ public class CapabilitySet {
             return d;
         }
         if (v.isString()) return v.asString();
+        // JS array → Java List
+        if (v.hasArrayElements()) {
+            List<Object> list = new ArrayList<>();
+            for (long i = 0; i < v.getArraySize(); i++) {
+                list.add(unwrapValue(v.getArrayElement(i)));
+            }
+            return list;
+        }
         // A2UI value objects like { literalString: "..." } or { path: "/..." }
         if (v.hasMembers()) {
             Map<String, Object> map = new LinkedHashMap<>();

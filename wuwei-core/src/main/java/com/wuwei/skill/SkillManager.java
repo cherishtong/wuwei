@@ -530,7 +530,7 @@ public class SkillManager {
 
         // Browser-js skills handle events client-side — acknowledge and return
         if ("browser-js".equals(skill.manifest().runtime())) {
-            eventBus.publish(new KernelEvent.EventAck(skillId, eventId, "ok", 0L));
+            eventBus.publish(new KernelEvent.EventAck(skillId, eventId, "ok", 0L, null));
             return;
         }
 
@@ -545,14 +545,13 @@ public class SkillManager {
             List<Object> patches = (List<Object>) result.getOrDefault("patches", List.of());
 
             System.out.println("[SkillManager] emit result patches=" + patches);
+            List<Object> appliedPatches = patches.isEmpty() ? List.of() : a2uiEngine.applyPatches(skillId, patches);
             if (!patches.isEmpty()) {
-                List<Object> applied = a2uiEngine.applyPatches(skillId, patches);
-                System.out.println("[SkillManager] applied patches=" + applied);
+                System.out.println("[SkillManager] applied patches=" + appliedPatches);
                 String tid = skillThreadMap.get(skillId);
-                eventBus.publish(new KernelEvent.A2uiPatch(skillId, tid, applied));
+                eventBus.publish(new KernelEvent.A2uiPatch(skillId, tid, appliedPatches));
             }
-
-            eventBus.publish(new KernelEvent.EventAck(skillId, eventId, "ok", latency));
+            eventBus.publish(new KernelEvent.EventAck(skillId, eventId, "ok", latency, appliedPatches));
 
             // W9: Async snapshot save after successful event (skip __init__)
             if (!"__init__".equals(eventId)) {
@@ -572,7 +571,7 @@ public class SkillManager {
 
         } catch (TimeoutException e) {
             long latency = System.currentTimeMillis() - start;
-            eventBus.publish(new KernelEvent.EventAck(skillId, eventId, "timeout", latency));
+            eventBus.publish(new KernelEvent.EventAck(skillId, eventId, "timeout", latency, null));
             eventBus.publish(new KernelEvent.GuardianWarning("timeout", skillId,
                 "Event " + eventId + " timed out after " + EVENT_TIMEOUT_SECONDS + "s"));
 
@@ -580,12 +579,12 @@ public class SkillManager {
             long latency = System.currentTimeMillis() - start;
             Throwable cause = e.getCause();
             String message = cause != null ? cause.getMessage() : e.getMessage();
-            eventBus.publish(new KernelEvent.EventAck(skillId, eventId, "error", latency));
+            eventBus.publish(new KernelEvent.EventAck(skillId, eventId, "error", latency, null));
             eventBus.publish(new KernelEvent.KernelError(skillId, "HANDLER_ERROR", message));
 
         } catch (Exception e) {
             long latency = System.currentTimeMillis() - start;
-            eventBus.publish(new KernelEvent.EventAck(skillId, eventId, "error", latency));
+            eventBus.publish(new KernelEvent.EventAck(skillId, eventId, "error", latency, null));
             eventBus.publish(new KernelEvent.KernelError(skillId, "RUNTIME_ERROR", e.getMessage()));
         }
     }

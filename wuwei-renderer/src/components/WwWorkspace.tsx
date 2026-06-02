@@ -177,37 +177,52 @@ export function WwWorkspace({ activeThreadId, initDetail }: WwWorkspaceProps) {
     const processor = processorRef.current!;
     const state = getCurrentThreadState();
 
-    const dataPatches: { path: string; value: unknown }[] = [];
-    const compPatches: Record<string, unknown>[] = [];
+    const compPatchMap = new Map<string, Record<string, unknown>>();
 
     const surface = surfaceMapRef.current.get(surfaceId);
     for (const p of patches) {
+      // Process data patches immediately — must run BEFORE surfaceUpdate
+      // so that DataModel values are correct when new components bind to them.
       if (p['type'] === 'data') {
-        dataPatches.push({ path: p['path'] as string, value: p['value'] });
-      } else {
+        const fullPath = String(p['path']).startsWith('/') ? String(p['path']) : '/' + String(p['path']);
+        processor.processMessages([
+          { updateDataModel: { surfaceId, path: fullPath, value: p['value'] } },
+        ] as never);
+        continue;
+      }
+      if (p['surfaceUpdate']) {
+        const su = p['surfaceUpdate'] as Record<string, unknown>;
+        const comps = su['components'] as Record<string, unknown>[];
+        if (comps && comps.length > 0 && surface) {
+          processor.processMessages([
+            { updateComponents: { surfaceId, components: comps } },
+          ] as never);
+        }
+        continue;
+      }
+      // Component patch — accumulate & merge by component ID
+      {
         const compId = p['id'] as string;
-        let compType = p['component'] as string | undefined;
-        if (!compType) {
-          compType = state.componentTypeMap.get(compId);
+        // Merge into existing accumulated patch for same component
+        let merged = compPatchMap.get(compId);
+        if (!merged) {
+          let compType = p['component'] as string | undefined;
+          if (!compType) { compType = state.componentTypeMap.get(compId); }
+          const surfaceComp = surface?.componentsModel.get(compId);
+          const base = surfaceComp?.properties ?? {};
+          merged = { ...base };
+          merged['id'] = compId;
+          merged['component'] = compType ?? surfaceComp?.type ?? 'unknown';
+          compPatchMap.set(compId, merged);
         }
-        const existing = surface?.componentsModel.get(compId);
-        const base = existing?.properties ?? {};
-        const merged: Record<string, unknown> = { ...base };
         for (const [k, v] of Object.entries(p)) {
-          if (k !== 'id' && k !== 'component') {
-            merged[k] = v;
-          }
+          if (k !== 'id' && k !== 'component') { merged[k] = v; }
         }
-        compPatches.push({ id: compId, component: compType ?? existing?.type ?? 'unknown', ...merged });
       }
     }
+    const compPatches = Array.from(compPatchMap.values());
 
     try {
-      for (const dp of dataPatches) {
-        processor.processMessages([
-          { updateDataModel: { surfaceId, path: dp.path, value: dp.value } },
-        ] as never);
-      }
       if (compPatches.length > 0) {
         processor.processMessages([
           { updateComponents: { surfaceId, components: compPatches } },
@@ -296,6 +311,7 @@ export function WwWorkspace({ activeThreadId, initDetail }: WwWorkspaceProps) {
         return;
       }
       initializedRef.current = skillId as string;
+      (window as any).__wuwei_activeSkillId = skillId;
       loadSkill(skillId, ui);
 
       const state = getCurrentThreadState();

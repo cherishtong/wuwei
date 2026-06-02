@@ -118,7 +118,7 @@ export function SkillPanel({
 
       {/* Source viewer Sheet */}
       <Sheet open={sourceOpen} onOpenChange={setSourceOpen}>
-        <SheetContent side="right" className="!w-[50vw] !min-w-[500px] !max-w-[900px] p-0 [&>button:last-child]:hidden">
+        <SheetContent side="right" className="!w-screen !max-w-none p-0">
           <WwWorkbench onClose={() => setSourceOpen(false)} />
         </SheetContent>
       </Sheet>

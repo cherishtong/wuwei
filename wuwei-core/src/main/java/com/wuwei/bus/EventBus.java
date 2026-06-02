@@ -70,6 +70,7 @@ public class EventBus {
         }
 
         String json = serialize(event);
+        System.out.println("FORWARD:" + json);
         log.debug("event -> {}", json);
         if (wsServer != null) {
             wsServer.broadcast(json);
@@ -99,7 +100,7 @@ public class EventBus {
     private static String getSkillId(KernelEvent event) {
         return switch (event) {
             case KernelEvent.A2uiPatch(var skillId, var tid, var p) -> skillId;
-            case KernelEvent.EventAck(var skillId, var eid, var st, var lat) -> skillId;
+            case KernelEvent.EventAck(var skillId, var eid, var st, var lat, var p) -> skillId;
             case KernelEvent.SkillLog(var skillId, var lvl, var msg) -> skillId;
             default -> "__global__";
         };

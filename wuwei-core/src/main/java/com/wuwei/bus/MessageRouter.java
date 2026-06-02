@@ -423,36 +423,41 @@ public class MessageRouter {
         }
 
         try {
-            Map<String, String> sources = new LinkedHashMap<>();
-            sources.put("skillId", skillId);
+            // Walk all files in skill directory recursively
+            List<Map<String, Object>> files = new ArrayList<>();
+            try (Stream<Path> walk = Files.walk(skillDir)) {
+                walk.filter(Files::isRegularFile).forEach(f -> {
+                    Map<String, Object> fi = new LinkedHashMap<>();
+                    String relPath = skillDir.relativize(f).toString().replace('\\', '/');
+                    fi.put("path", relPath);
+                    try {
+                        fi.put("size", Files.size(f));
+                    } catch (Exception ignored) { fi.put("size", 0); }
+                    // Read content for text files; skip binary/large files
+                    String name = f.getFileName().toString().toLowerCase();
+                    boolean isText = name.endsWith(".js") || name.endsWith(".json")
+                        || name.endsWith(".md") || name.endsWith(".css")
+                        || name.endsWith(".html") || name.endsWith(".txt")
+                        || name.endsWith(".xml") || name.endsWith(".yaml")
+                        || name.endsWith(".yml") || name.endsWith(".toml");
+                    if (isText) {
+                        try {
+                            fi.put("content", Files.readString(f));
+                        } catch (Exception ignored) { fi.put("content", ""); }
+                    }
+                    files.add(fi);
+                });
+            }
+            files.sort((a, b) -> ((String) a.get("path")).compareToIgnoreCase((String) b.get("path")));
 
-            Path manifestPath = skillDir.resolve("skill.json");
-            if (Files.exists(manifestPath)) {
-                sources.put("skillJson", Files.readString(manifestPath));
-            }
-            // Multi-file (ui/index.json, handlers/index.js) or flat (ui.json, handlers.js)
-            Path uiMulti = skillDir.resolve("genome/ui/index.json");
-            Path uiPath = Files.exists(uiMulti) ? uiMulti : skillDir.resolve("genome/ui.json");
-            if (Files.exists(uiPath)) {
-                sources.put("uiJson", Files.readString(uiPath));
-            }
-            Path jsMulti = skillDir.resolve("genome/handlers/index.js");
-            Path handlersPath = Files.exists(jsMulti) ? jsMulti : skillDir.resolve("genome/handlers.js");
-            if (Files.exists(handlersPath)) {
-                sources.put("handlersJs", Files.readString(handlersPath));
-            }
-
-            // Send as a custom event directly to the requesting session
             String json = mapper.writeValueAsString(Map.of(
                 "type", "skill-source",
                 "skillId", skillId,
-                "skillJson", sources.getOrDefault("skillJson", ""),
-                "uiJson", sources.getOrDefault("uiJson", ""),
-                "handlersJs", sources.getOrDefault("handlersJs", "")
+                "files", files
             ));
             eventBus.publishTo(session, new KernelEvent.SystemNotify(
                 "源代码: " + skillId,
-                "已加载 " + sources.size() + " 个文件"));
+                "共 " + files.size() + " 个文件"));
             session.send(json, true);
         } catch (Exception e) {
             log.error("Failed to read skill source {}: {}", skillId, e.getMessage());

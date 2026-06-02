@@ -114,6 +114,17 @@ async function setupTauriListeners() {
         ws = null;
       }
     });
+    // kernel-event: ALL kernel messages forwarded via Rust stdout proxy
+    await listen<Record<string, unknown>>('kernel-event', (event) => {
+      const msg = event.payload;
+      // Dispatch to namespace handlers
+      const ns = msg.ns as string | undefined;
+      if (ns && nsHandlers.has(ns)) {
+        nsHandlers.get(ns)!.forEach(h => h(msg));
+      }
+      // Also dispatch to general handlers
+      handlers.forEach(h => h(msg));
+    });
   } catch {
     // Tauri event API not available
   }

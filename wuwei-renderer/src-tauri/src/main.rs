@@ -154,6 +154,12 @@ fn spawn_kernel(app: &AppHandle) {
                             let _ = app_stdout.emit("kernel-ready", port);
                             eprintln!("[kernel] Ready on port {}", port);
                         }
+                    } else if text.starts_with("FORWARD:") {
+                        // Forward kernel events directly to frontend via Tauri IPC
+                        let json_str = &text["FORWARD:".len()..];
+                        if let Ok(payload) = serde_json::from_str::<serde_json::Value>(json_str) {
+                            let _ = app_stdout.emit("kernel-event", &payload);
+                        }
                     }
                 }
                 Err(_) => break,

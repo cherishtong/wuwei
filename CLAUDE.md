@@ -120,6 +120,92 @@ Browser/Tauri ←→ Vite SPA ←→ kernel.ts ←→ WebSocket ←→ WsServer 
 | `onDeactivate(capability)` | Deactivation | One arg: capability |
 | `onUninstall(capability)` | Before uninstall | One arg: capability |
 
+### Skill CRUD patterns (critical gotchas)
+
+These patterns were hardened through the jiduobao (记多宝) password manager skill. **Always follow these rules when building CRUD skills.**
+
+#### 1. DataModel binding preservation
+
+```javascript
+// ❌ WRONG — c.ui.set replaces the DataModel binding {path:"/x"} with a literal value.
+// The TextField no longer syncs user input to DataModel. Save reads stale data.
+c.ui.set("modal-title-input", "value", oldValue);
+c.data.set("etitle", oldValue);
+
+// ✅ CORRECT — only c.data.set. The TextField's {path:"/etitle"} binding
+// resolves the new DataModel value automatically.
+c.data.set("etitle", oldValue);
+```
+
+**Rule**: Never use `c.ui.set` on any component property that has a DataModel binding (`{"path": "/..."}`). Always use `c.data.set` to update the DataModel value, letting the binding resolve naturally.
+
+#### 2. Modal open/close — use literal boolean, not DataModel binding
+
+```javascript
+// In page render:
+{"id":"edit-modal", "component":"Modal", "open":false, ...}  // literal false
+
+// Open: c.ui.set component patch (WwWorkspace auto-merges, preserves other props)
+c.ui.set("edit-modal", "open", true);
+
+// Close:
+c.ui.set("edit-modal", "open", false);
+```
+
+**Why**: DataModel reactivity (`open: {"path": "/mopen"}`) doesn't reliably trigger Modal re-render in custom WV components. Literal boolean + `c.ui.set` component patches are reliable.
+
+#### 3. surfaceUpdate (c.ui.render) ONLY for page transitions
+
+```javascript
+// ✅ Page TRANSITION (different root children):
+// unlock page (msg, unlock-row) → manage page (top-card, table-card, edit-modal)
+c.ui.render([...completely different component tree...]);
+
+// ❌ Same-page refresh after save — surfaceUpdate may not trigger re-render:
+c.ui.render([...same component tree with updated rows...]);
+
+// ✅ Same-page update — use individual c.ui.set patches:
+refreshTable(c);  // → c.ui.set("pwd-table","rows",...), c.ui.set("page-nav",...)
+```
+
+#### 4. Table refresh — individual component patches
+
+```javascript
+function refreshTable(c) {
+    var d = buildRows(c);
+    c.ui.set("pwd-table", "rows", d.rows);        // WwWorkspace merges with existing columns
+    c.ui.set("page-nav", "totalPages", d.pages);
+    c.ui.set("page-nav", "totalItems", d.total);
+}
+```
+
+WwWorkspace's `applyPatches` automatically merges individual patches with existing component properties (read from `surface.componentsModel`), preserving `columns`, `component` type, etc.
+
+#### 5. A2uiEngine.applyPatches replaces, not merges
+
+`MessageProcessor.processUpdateComponentsMessage` does `existing.properties = properties` — full replacement. The kernel's `A2uiEngine.applyPatches` merges individual patches into the stored tree before sending to frontend. WwWorkspace's `applyPatches` does another merge for individual patches that arrive without `component` type.
+
+#### 6. EventAck carries patches since W6.4+
+
+`KernelEvent.EventAck` includes a `patches` field. The frontend `bridge.ts` checks `event-ack` messages with patches and dispatches a synthetic `a2ui-patch` CustomEvent. Patches reach the frontend through TWO channels: `A2uiPatch` event (broadcast) and `EventAck` (direct response to `handle-event`).
+
+#### 7. Data flow: individual patch from kernel to React re-render
+
+```
+kernel: c.ui.set("id","prop",val)
+  → pendingPatches.add({id, prop:val})
+  → drainPatches() → emit() returns patches
+  → a2uiEngine.applyPatches() merges with stored tree → full component
+  → EventBus.publish(A2uiPatch) + EventAck.patches
+  → WebSocket/STDOUT → frontend bridge.ts
+  → dispatch('a2ui-patch') → WwWorkspace.applyPatches()
+  → compPatchMap accumulates → merge with surface.componentsModel
+  → processor.processMessages([{updateComponents}])
+  → MessageProcessor: existing.properties = properties
+  → ComponentModel.onUpdated → GenericBinder.rebuildAllBindings()
+  → React useSyncExternalStore → re-render
+```
+
 ### Tauri
 
 - Config: `src-tauri/tauri.conf.json` — `devUrl: http://localhost:5176`, `decorations: false`, identifier `com.wuwei.shell`.

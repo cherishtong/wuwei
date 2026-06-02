@@ -49,7 +49,8 @@ public sealed interface KernelEvent permits
         String skillId,
         String eventId,
         String status,
-        long latencyMs
+        long latencyMs,
+        List<Object> patches
     ) implements KernelEvent {}
 
     record GateRequest(
