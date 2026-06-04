@@ -30,7 +30,7 @@ class EventBusTest {
         var patches = List.of();
         var ui = mapper.createObjectNode().put("version", "a2ui/1.0");
         var event = new KernelEvent.SkillActivated("test-skill", "测试技能", "thread-1", ui, patches,
-            "js", null, java.util.Map.of());
+            "js", null, java.util.Map.of(), null);
         String json = serialize(event);
         JsonNode node = mapper.readTree(json);
 

@@ -36,7 +36,8 @@ public sealed interface KernelEvent permits
         List<Object> patches,
         String runtime,
         String handlersJs,
-        Map<String, Object> capabilities
+        Map<String, Object> capabilities,
+        Map<String, Object> sidebarConfig
     ) implements KernelEvent {}
 
     record A2uiPatch(

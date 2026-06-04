@@ -7,6 +7,9 @@ import { wvCatalog } from '@/wv-components/a2ui';
 import { kernel } from '../kernel';
 import { surfaceStore } from '../stores/SurfaceStore';
 import { BrowserRuntime } from '../runtime/BrowserRuntime';
+import { SidebarProvider } from '@/wv-components/ui/sidebar';
+import { WwBlogSidebar } from './WwBlogSidebar';
+import { WwBlogToc } from './WwBlogToc';
 
 const CATALOG_ID = 'https://a2ui.org/specification/v0_9/basic_catalog.json';
 
@@ -32,6 +35,13 @@ export function WwWorkspace({ activeThreadId, initDetail }: WwWorkspaceProps) {
   const processorRef = useRef<MessageProcessor<any> | null>(null);
   const dedupRef = useRef({ key: '', time: 0 });
   const initializedRef = useRef<string | null>(null);
+
+  // Blog state for md runtime
+  const [blogState, setBlogState] = useState<{
+    skillId: string;
+    sidebarConfig: Record<string, unknown> | null;
+    activeFile: string | null;
+  } | null>(null);
 
   const threadStates = useRef(new Map<string, ThreadSurfaceState>());
   const surfaceThreadMap = useRef(new Map<string, string>());
@@ -328,6 +338,13 @@ export function WwWorkspace({ activeThreadId, initDetail }: WwWorkspaceProps) {
         requestAnimationFrame(() => {
           state.browserRuntime.handleEvent(skillId, '__init__', {});
         });
+      } else if (runtime === 'md') {
+        state.isBrowserJs = false;
+        setBlogState({
+          skillId,
+          sidebarConfig: (e as CustomEvent).detail.sidebarConfig || null,
+          activeFile: null,
+        });
       } else {
         state.isBrowserJs = false;
       }
@@ -347,6 +364,7 @@ export function WwWorkspace({ activeThreadId, initDetail }: WwWorkspaceProps) {
         state.skillId = null;
         clearSurfaces();
         initializedRef.current = null;
+        setBlogState(null);
       }
     };
 
@@ -393,35 +411,76 @@ export function WwWorkspace({ activeThreadId, initDetail }: WwWorkspaceProps) {
       requestAnimationFrame(() => {
         state.browserRuntime.handleEvent(d.skillId as string, '__init__', {});
       });
+    } else if (d.runtime === 'md') {
+      state.isBrowserJs = false;
+      setBlogState({
+        skillId: d.skillId as string,
+        sidebarConfig: (d.sidebarConfig as Record<string, unknown>) || null,
+        activeFile: null,
+      });
     } else {
       state.isBrowserJs = false;
     }
   }, [initDetail]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  return (
-    <div className="flex flex-col h-full">
-      <div className="flex-1 flex flex-col overflow-y-auto py-6">
-        {debugError && (
-          <div className="m-4 p-3 rounded border border-red-500/30 bg-red-500/10 text-red-600 dark:text-red-400 text-xs font-mono whitespace-pre-wrap">
-            {debugError}
+  // Content area (shared between standard and blog layouts)
+  const contentArea = (
+    <div className="flex-1 flex flex-col py-6">
+      {debugError && (
+        <div className="m-4 p-3 rounded border border-red-500/30 bg-red-500/10 text-red-600 dark:text-red-400 text-xs font-mono whitespace-pre-wrap">
+          {debugError}
+        </div>
+      )}
+      {loading && surfaceIds.length === 0 ? (
+        <div className="flex-1 flex items-center justify-center">
+          <div className="flex flex-col items-center gap-3">
+            <div className="w-6 h-6 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
+            <span className="text-xs text-muted-foreground">正在加载技能界面...</span>
           </div>
-        )}
-        {loading && surfaceIds.length === 0 ? (
-          <div className="flex-1 flex items-center justify-center">
-            <div className="flex flex-col items-center gap-3">
-              <div className="w-6 h-6 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
-              <span className="text-xs text-muted-foreground">正在加载技能界面...</span>
-            </div>
-          </div>
-        ) : (
-          <MarkdownContext.Provider value={renderMarkdown}>
-            {surfaceIds.map((id) => {
-              const surface = surfaceMapRef.current.get(id);
-              return surface ? <A2uiSurface key={id} surface={surface as never} /> : null;
-            })}
-          </MarkdownContext.Provider>
-        )}
+        </div>
+      ) : (
+        <MarkdownContext.Provider value={renderMarkdown}>
+          {surfaceIds.map((id) => {
+            const surface = surfaceMapRef.current.get(id);
+            return surface ? <A2uiSurface key={id} surface={surface as never} /> : null;
+          })}
+        </MarkdownContext.Provider>
+      )}
+    </div>
+  );
+
+  // Blog layout for md runtime — 3 independently scrollable columns
+  if (blogState && blogState.skillId) {
+    return (
+      <div className="flex flex-1 min-h-0">
+        {/* Left sidebar — independently scrollable */}
+        <div className="w-64 flex-shrink-0 flex flex-col bg-sidebar text-sidebar-foreground border-r border-sidebar-border overflow-y-auto">
+          <SidebarProvider>
+            <WwBlogSidebar
+              skillId={blogState.skillId}
+              sidebarConfig={blogState.sidebarConfig as { home?: { label: string; file: string }; menu?: { label: string; file?: string; children?: { label: string; file?: string; children?: unknown[] }[] }[] } | null}
+              activeFile={blogState.activeFile}
+              onNavigate={(file) => setBlogState((prev) => prev ? { ...prev, activeFile: file } : null)}
+            />
+          </SidebarProvider>
+        </div>
+
+        {/* Center content — independently scrollable */}
+        <div className="flex-1 min-w-0 bg-background px-8 overflow-y-auto">
+          {contentArea}
+        </div>
+
+        {/* Right TOC — independently scrollable within its column */}
+        <div className="w-48 flex-shrink-0 hidden xl:flex flex-col border-l border-sidebar-border bg-sidebar overflow-y-auto">
+          <WwBlogToc />
+        </div>
       </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col h-full overflow-y-auto">
+      {contentArea}
     </div>
   );
 }

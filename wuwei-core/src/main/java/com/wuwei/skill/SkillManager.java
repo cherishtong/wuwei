@@ -27,6 +27,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeoutException;
@@ -42,6 +43,7 @@ public class SkillManager {
 
     private final RuntimePool runtimePool;
     private final A2uiEngine a2uiEngine;
+    private final com.wuwei.rag.SkillIndexer skillIndexer;
     private final CapabilityManager capManager;
     private final StoreService storeService;
     private final SkillStateStore stateStore;
@@ -68,7 +70,8 @@ public class SkillManager {
                         ObjectMapper mapper, AstAuditor astAuditor,
                         EcosystemGuardian ecosystemGuardian,
                         SnapshotService snapshotService,
-                        ConversationService conversationService) {
+                        ConversationService conversationService,
+                        com.wuwei.rag.SkillIndexer skillIndexer) {
         this.runtimePool = runtimePool;
         this.a2uiEngine = a2uiEngine;
         this.capManager = capManager;
@@ -80,6 +83,7 @@ public class SkillManager {
         this.ecosystemGuardian = ecosystemGuardian;
         this.snapshotService = snapshotService;
         this.conversationService = conversationService;
+        this.skillIndexer = skillIndexer;
 
         String home = System.getProperty("user.home");
         this.skillsBaseDir = Paths.get(home, ".wuwei", "skills").toString();
@@ -137,6 +141,9 @@ public class SkillManager {
                 String skillId = skillDir.getFileName().toString();
                 try {
                     loadFromDirectory(skillDir);
+                    // Register modification time to prevent file watcher from reactivating
+                    Long latestMod = getLatestModified(skillDir);
+                    if (latestMod != 0) lastModified.put(skillId, latestMod);
                     System.out.println("[SkillManager] Startup-loaded: " + skillId);
                     log.info("Startup-loaded skill: {}", skillId);
                 } catch (Exception e) {
@@ -173,7 +180,19 @@ public class SkillManager {
 
                 try (var entries = Files.list(base)) {
                     entries.filter(Files::isDirectory).forEach(skillDir -> {
-                        checkAndReload(skillDir);
+                        String id = skillDir.getFileName().toString();
+                        if (!lastModified.containsKey(id)) {
+                            // New directory detected — load it
+                            try {
+                                loadFromDirectory(skillDir);
+                                activate(id);
+                                System.out.println("[kernel] Watcher: loaded new skill " + id);
+                            } catch (Exception ex) {
+                                log.warn("Watcher: failed to load new skill {}: {}", id, ex.getMessage());
+                            }
+                        } else {
+                            checkAndReload(skillDir);
+                        }
                     });
                 } catch (Exception e) {
                     log.warn("File watcher scan error: {}", e.getMessage());
@@ -374,6 +393,36 @@ public class SkillManager {
         // Ecosystem guardian check
         ecosystemGuardian.check(skillId, genome);
 
+        // ── Handle runtime: "md" (sidebar.json + c.storage handlers) ──
+        if ("md".equals(manifest.runtime())) {
+            Path phenotypeDir = skillDir.resolve("phenotype");
+            MdRuntime.copyAssets(genomeDir, phenotypeDir);
+            uiTree = MdRuntime.buildUiTree(genomeDir);
+            uiJson = mapper.writeValueAsString(uiTree);
+            handlersJs = MdRuntime.buildHandlers(genomeDir);
+            System.out.println("[loadFromDirectory] " + skillId + " md handlers len=" + handlersJs.length());
+            a2uiEngine.register(skillId, uiTree);
+            storeService.recordInstall(manifest);
+            Consumer<List<Object>> flush = patches -> {
+                var applied = a2uiEngine.applyPatches(skillId, patches);
+                if (!applied.isEmpty()) { String tid = skillThreadMap.get(skillId); eventBus.publish(new KernelEvent.A2uiPatch(skillId, tid, applied)); }
+            };
+            CapabilitySet capSet = capManager.inject(manifest);
+            Object runtime = runtimePool.create(manifest, handlersJs, capSet, flush);
+            LoadedSkill mdSkill = new LoadedSkill(manifest, runtime, uiTree, SkillStatus.RUNNING);
+            skills.put(skillId, mdSkill);
+            log.info("Skill loaded (md): {}", skillId);
+            if (skillIndexer != null) {
+                skillIndexer.addQuick(skillId,
+                    manifest.meta() != null && manifest.meta().getOrDefault("title", skillId) != null
+                        ? manifest.meta().getOrDefault("title", skillId).toString() : skillId,
+                    manifest.meta() != null && manifest.meta().getOrDefault("description", "") != null
+                        ? manifest.meta().getOrDefault("description", "").toString() : "",
+                    new ArrayList<>(manifest.capabilities() != null ? manifest.capabilities().keySet() : Set.of()));
+            }
+            return mdSkill;
+        }
+
         // Build capabilities and create sandbox runtime
         CapabilitySet capSet = capManager.inject(manifest);
 
@@ -415,6 +464,20 @@ public class SkillManager {
         // Fire onInstall lifecycle hook (once, on first load)
         if (runtime instanceof SkillRuntime sr) {
             sr.callLifecycleHandler("onInstall");
+        }
+        // Index skill for RAG retrieval (quick: name + description only, no LLM call)
+        if (skillIndexer != null) {
+            String name = skillId;
+            String desc = "";
+            try {
+                var meta = manifest.meta();
+                if (meta != null) {
+                    name = meta.getOrDefault("title", skillId).toString();
+                    desc = meta.getOrDefault("description", "").toString();
+                }
+            } catch (Exception ignored) {}
+            skillIndexer.addQuick(skillId, name, desc,
+                new ArrayList<>(manifest.capabilities() != null ? manifest.capabilities().keySet() : Set.of()));
         }
         return skill;
     }
@@ -465,8 +528,27 @@ public class SkillManager {
         @SuppressWarnings("unchecked")
         Map<String, Object> uiMap = tree != null ? mapper.convertValue(tree, Map.class) : Map.of();
         System.out.println("[activate] uiMap keys=" + uiMap.keySet() + " hasComponents=" + uiMap.containsKey("components"));
+
+        // Read sidebar.json for md runtime
+        Map<String, Object> sidebarConfig = null;
+        if ("md".equals(runtime)) {
+            Path sidebarFile = Paths.get(skillsBaseDir, skillId, "genome", "sidebar.json");
+            try {
+                if (Files.exists(sidebarFile)) {
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> sc = mapper.readValue(sidebarFile.toFile(), Map.class);
+                    sidebarConfig = sc;
+                } else {
+                    Path genomeDir = Paths.get(skillsBaseDir, skillId, "genome");
+                    sidebarConfig = MdRuntime.buildDefaultSidebarConfig(genomeDir);
+                }
+            } catch (Exception e) {
+                log.warn("Failed to read sidebar config for {}: {}", skillId, e.getMessage());
+            }
+        }
+
         eventBus.publish(new KernelEvent.SkillActivated(
-            skillId, skill.manifest().name(), threadId, uiMap, List.of(), runtime, handlersJs, capabilities));
+            skillId, skill.manifest().name(), threadId, uiMap, List.of(), runtime, handlersJs, capabilities, sidebarConfig));
 
         // Write skill-event to conversation history
         writeConvEvent(threadId, skillId, "已激活技能 **" + skill.manifest().name() + "**", skillId);
@@ -671,6 +753,7 @@ public class SkillManager {
         }
 
         a2uiEngine.unregister(skillId);
+        if (skillIndexer != null) skillIndexer.remove(skillId);
         stateStore.removeSkill(skillId);
         ecosystemGuardian.forget(skillId);
         storeService.removeSkill(skillId);
@@ -786,5 +869,42 @@ public class SkillManager {
 
     public int loadedCount() {
         return skills.size();
+    }
+    public int getLoadedCount() {
+        return skills.size();
+    }
+    public int getActiveCount() {
+        return (int) skills.values().stream().filter(s -> s.status() == SkillStatus.RUNNING).count();
+    }
+    /** Returns per-skill capability details */
+    public java.util.List<Map<String, Object>> getSkillCapabilities() {
+        java.util.List<Map<String, Object>> list = new java.util.ArrayList<>();
+        for (var entry : skills.entrySet()) {
+            var s = entry.getValue();
+            Map<String, Object> item = new java.util.LinkedHashMap<>();
+            item.put("skillId", entry.getKey());
+            item.put("name", s.manifest().meta() != null ? s.manifest().meta().getOrDefault("title", entry.getKey()) : entry.getKey());
+            item.put("capabilities", new java.util.ArrayList<>(s.manifest().capabilities() != null ? s.manifest().capabilities().keySet() : java.util.Set.of()));
+            list.add(item);
+        }
+        return list;
+    }
+
+    /** Returns capability distribution across loaded skills */
+    public Map<String, Object> getCapabilityStats() {
+        Map<String, Object> stats = new java.util.LinkedHashMap<>();
+        Map<String, Integer> capCounts = new java.util.LinkedHashMap<>();
+        java.util.List<String> known = java.util.List.of("database", "ui", "crypto", "websearch", "network", "file", "storage", "ai", "os");
+        for (String k : known) capCounts.put(k, 0);
+        int total = 0;
+        for (LoadedSkill s : skills.values()) {
+            total++;
+            for (String k : known) {
+                if (s.manifest().hasCapability(k)) capCounts.merge(k, 1, Integer::sum);
+            }
+        }
+        stats.put("total", total);
+        stats.put("byCapability", capCounts);
+        return stats;
     }
 }

@@ -102,9 +102,9 @@ export function SkillPanel({
         </div>
       )}
 
-      {/* WwWorkspace — conditionally rendered to ensure clean mount on each activation */}
+      {/* WwWorkspace — flex child that fills remaining space */}
       {hasSkill && (
-        <div className="flex-1 min-h-0 overflow-auto" style={{ padding: 20 }}>
+        <div className="flex-1 min-h-0 flex flex-col" style={{ padding: 20 }}>
           <WwWorkspace key={skillId ?? 'no-skill'} activeThreadId={activeThreadId} initDetail={initDetail} />
         </div>
       )}
