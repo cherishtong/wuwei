@@ -347,16 +347,16 @@ Tauri build (per-platform): kernel native image → copy to `src-tauri/binaries/
 ```bash
 # Windows (PowerShell)
 .\scripts\package-cloud.ps1
-# → deploy/wuwei-cloud-v6.4.0.zip
+# → deploy/wuwei-cloud-0.0.1-beta.zip
 
 # Linux
 ./scripts/package-cloud.sh
-# → deploy/wuwei-cloud-v6.4.0.tar.gz
+# → deploy/wuwei-cloud-0.0.1-beta.tar.gz
 ```
 
 The package contains:
 ```
-wuwei-cloud-v6.4.0/
+wuwei-cloud-0.0.1-beta/
 ├── wuwei-kernel.jar       # Fat JAR
 ├── dist/                  # Frontend SPA (built with VITE_KERNEL_URL=/ws)
 ├── wuwei.json             # Cloud config template (set WUWEI_API_KEY env var)
@@ -375,11 +375,11 @@ docker run -d -p 8080:8080 -e WUWEI_API_KEY=sk-xxx -v ~/.wuwei:/root/.wuwei wuwe
 
 ```bash
 # 1. Upload package
-scp deploy/wuwei-cloud-v6.4.0.tar.gz user@host:/opt/
+scp deploy/wuwei-cloud-0.0.1-beta.tar.gz user@host:/opt/
 
 # 2. On server
-cd /opt && tar -xzf wuwei-cloud-v6.4.0.tar.gz
-cd wuwei-cloud-v6.4.0
+cd /opt && tar -xzf wuwei-cloud-0.0.1-beta.tar.gz
+cd wuwei-cloud-0.0.1-beta
 export WUWEI_API_KEY=sk-xxx
 ./start.sh
 

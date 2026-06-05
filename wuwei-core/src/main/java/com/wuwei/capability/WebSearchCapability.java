@@ -111,7 +111,7 @@ public class WebSearchCapability {
             HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(TAVILY_URL))
                 .header("Content-Type", "application/json")
-                .header("User-Agent", "Wuwei/6.4.0")
+                .header("User-Agent", "Wuwei/0.0.1-beta")
                 .POST(HttpRequest.BodyPublishers.ofString(requestBody))
                 .timeout(Duration.ofSeconds(15))
                 .build();

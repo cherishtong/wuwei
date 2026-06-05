@@ -122,7 +122,7 @@ class KernelServerIntegrationTest {
         assertNotNull(ready, "Should receive kernel-ready on connect");
         JsonNode readyNode = mapper.readTree(ready);
         assertEquals("kernel-ready", readyNode.get("type").asText());
-        assertEquals("6.4.0", readyNode.get("version").asText());
+        assertEquals("0.0.1-beta", readyNode.get("version").asText());
         assertTrue(readyNode.get("port").asInt() > 0);
 
         // 2. Send list-skills, verify correct response

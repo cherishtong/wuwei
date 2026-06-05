@@ -27,4 +27,4 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
   </React.StrictMode>
 );
 
-console.log('[wuwei-renderer] initialized v6.5.0 (React)');
+console.log('[wuwei-renderer] initialized v0.0.1-beta (React)');

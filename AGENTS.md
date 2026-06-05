@@ -8,7 +8,7 @@ Wuwei (无为) is a desktop AI skill platform. It consists of a Java 21 kernel t
 
 The kernel communicates with the frontend over WebSocket. The Tauri Rust backend spawns the kernel as a child process, monitors its health, and forwards stdout events to the frontend via Tauri IPC.
 
-**Version:** 6.4.0 across all modules.
+**Version:** 0.0.1-beta across all modules.
 
 ## Repository Layout
 
@@ -130,7 +130,7 @@ cd wuwei-core && java -jar build/libs/wuwei-kernel.jar --profile cloud
 cd wuwei-renderer && npm run build   # uses .env.production → VITE_KERNEL_URL=/ws
 
 # CI/CD package
-./scripts/package-cloud.sh           # → deploy/wuwei-cloud-v6.4.0.tar.gz
+./scripts/package-cloud.sh           # → deploy/wuwei-cloud-0.0.1-beta.tar.gz
 
 # Docker
 docker build -t wuwei-cloud .
@@ -395,7 +395,7 @@ Key files:
 
 ```json
 {
-  "version": "7.0.0",
+  "version": "0.0.1-beta",
   "llm": {
     "provider": "deepseek",
     "model": "deepseek-v4-pro",

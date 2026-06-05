@@ -49,7 +49,7 @@ public class WsServer {
                 sessions.add(session);
 
                 KernelEvent.KernelReady ready =
-                    new KernelEvent.KernelReady("6.4.0", port);
+                    new KernelEvent.KernelReady("0.0.1-beta", port);
                 session.send(eventBus.serialize(ready), true);
                 System.out.println("[WsServer] WS connected (total: " + sessions.size() + ")");
             }

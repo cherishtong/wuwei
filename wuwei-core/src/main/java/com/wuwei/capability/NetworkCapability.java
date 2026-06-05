@@ -127,7 +127,7 @@ public class NetworkCapability {
         try {
             HttpRequest.Builder reqBuilder = HttpRequest.newBuilder()
                 .uri(URI.create(url))
-                .header("User-Agent", "Wuwei/6.4.0")
+                .header("User-Agent", "Wuwei/0.0.1-beta")
                 .timeout(Duration.ofSeconds(10));
 
             switch (method) {

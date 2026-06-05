@@ -75,7 +75,7 @@ export function SystemPage({ onOpenModelConfig }: SystemPageProps) {
           <div className="p-4 rounded-lg border">
             <div className="text-sm font-medium">无为 Wuwei</div>
             <div className="text-xs text-muted-foreground mt-1 space-y-0.5">
-              <p>版本 6.4.0</p>
+              <p>版本 0.0.1-beta</p>
               <p>AI 驱动的应用生成与运行平台</p>
               <p className="mt-2" style={{ fontFamily: '"Noto Serif SC", "Songti SC", serif', fontStyle: 'italic', opacity: 0.6 }}>
                 大巧若拙，大音希声

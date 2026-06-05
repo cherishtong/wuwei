@@ -16,12 +16,12 @@ class EventBusTest {
 
     @Test
     void kernelReady_typeShouldBeKebabCase() throws Exception {
-        var event = new KernelEvent.KernelReady("6.4.0", 49281);
+        var event = new KernelEvent.KernelReady("0.0.1-beta", 49281);
         String json = serialize(event);
         JsonNode node = mapper.readTree(json);
 
         assertEquals("kernel-ready", node.get("type").asText());
-        assertEquals("6.4.0", node.get("version").asText());
+        assertEquals("0.0.1-beta", node.get("version").asText());
         assertEquals(49281, node.get("port").asInt());
     }
 

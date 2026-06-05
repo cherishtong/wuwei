@@ -1,6 +1,6 @@
 [package]
 name = "wuwei-shell"
-version = "6.4.0"
+version = "0.0.1-beta"
 edition = "2021"
 
 [build-dependencies]
