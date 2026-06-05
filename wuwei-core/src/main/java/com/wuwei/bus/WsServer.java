@@ -2,12 +2,16 @@ package com.wuwei.bus;
 
 import com.wuwei.bus.event.KernelEvent;
 import io.helidon.webserver.WebServer;
+import io.helidon.webserver.http.HttpRouting;
 import io.helidon.webserver.websocket.WsRouting;
 import io.helidon.websocket.WsListener;
 import io.helidon.websocket.WsSession;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -62,9 +66,24 @@ public class WsServer {
             }
         };
 
+        // Serve static asset files from ~/.wuwei/skills/*/phenotype/assets/
+        Path skillsAssetsDir = Paths.get(System.getProperty("user.home"), ".wuwei", "skills");
+
         server = WebServer.builder()
             .host("127.0.0.1")
             .port(port)
+            .routing(b -> b
+                .get("/skills/{skillId}/assets/{+path}", (req, res) -> {
+                    String skillId = req.path().pathParameters().get("skillId");
+                    String path = req.path().pathParameters().get("path");
+                    Path file = skillsAssetsDir.resolve(skillId).resolve("phenotype").resolve("assets").resolve(path);
+                    if (Files.exists(file) && !Files.isDirectory(file)) {
+                        res.send(file);
+                    } else {
+                        res.status(404).send("Not found");
+                    }
+                })
+                .any("/ws", (req, res) -> { /* handled by WS upgrade */ }))
             .addRouting(WsRouting.builder()
                 .endpoint("/ws", listener))
             .build()
@@ -94,5 +113,8 @@ public class WsServer {
 
     public int getPort() {
         return port;
+    }
+    public int getSessionCount() {
+        return sessions.size();
     }
 }

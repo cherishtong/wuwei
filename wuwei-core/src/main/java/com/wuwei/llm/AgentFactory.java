@@ -77,6 +77,29 @@ public class AgentFactory {
             .build();
     }
 
+    /**
+     * Simple chat — send a prompt, get a text response.
+     * Used by SkillIndexer for LLM-based indexing and retrieval.
+     */
+    public String chat(String prompt) {
+        return rawChat(prompt);
+    }
+
+    /** Pure chat — no code-gen bias. Sends system + user messages for clean JSON output. */
+    public String rawChat(String prompt) {
+        try {
+            LlmConfig config = resolveConfig("ai/ask", null);
+            ChatModel model = buildChatModel(config);
+            var response = model.chat(
+                dev.langchain4j.data.message.SystemMessage.from("You are a code analysis assistant. Output ONLY valid JSON, no markdown fences, no explanations."),
+                dev.langchain4j.data.message.UserMessage.from(prompt));
+            return response.aiMessage().text();
+        } catch (Exception e) {
+            log.warn("rawChat failed: {}", e.getMessage());
+            return null;
+        }
+    }
+
     /** Synchronous (non-streaming) generate agent — avoids DeepSeek V4 streaming tool-call leakage bug. */
     public SkillGenerateSyncAgent createGenerateSyncAgent(String skillId, Map<String, String> override) {
         LlmConfig config = resolveConfig("skill/generate", override);
@@ -162,7 +185,7 @@ public class AgentFactory {
             .modelName(config.model())
             .timeout(Duration.ofSeconds(300))
             .maxRetries(1)
-            .logRequests(true)
+            .logRequests(false)
             .logResponses(true)
             .build();
     }
@@ -174,7 +197,7 @@ public class AgentFactory {
             .apiKey(resolveApiKey(config))
             .modelName(config.model())
             .timeout(Duration.ofSeconds(300))
-            .logRequests(true)
+            .logRequests(false)
             .logResponses(true)
             .build();
     }

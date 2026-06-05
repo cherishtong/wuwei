@@ -125,9 +125,9 @@ public class AstAuditor {
                 "id 必须是 kebab-case: " + id);
         }
         String runtime = manifest.runtime();
-        if (!"js".equals(runtime) && !"browser-js".equals(runtime)) {
+        if (!"js".equals(runtime) && !"browser-js".equals(runtime) && !"md".equals(runtime)) {
             throw new GateException("UNSUPPORTED_RUNTIME",
-                "runtime 必须是 'js' 或 'browser-js'，当前值: " + runtime);
+                "runtime 必须是 'js'、'browser-js' 或 'md'，当前值: " + runtime);
         }
         String abi = manifest.abi();
         if (abi == null || !abi.matches("^\\d+\\.\\d+$")) {

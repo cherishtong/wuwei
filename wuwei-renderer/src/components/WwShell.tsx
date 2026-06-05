@@ -1,15 +1,16 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Group, Panel, Separator } from 'react-resizable-panels';
 import { WwTitleBar } from './WwTitleBar';
 import { WwNavbar, type NavTab } from './WwNavbar';
 import { WwIntent } from './WwIntent';
-import { WwTerminal } from './WwTerminal';
+import { LogViewer } from './LogViewer';
 import { WwGateDialog } from './WwGateDialog';
 import { WwModelConfig } from './WwModelConfig';
 import { SkillsPage } from './SkillsPage';
 import { SystemPage } from './SystemPage';
 import { WuweiChat } from './WuweiChat';
 import { SkillPanel } from './SkillPanel';
+import { SystemMonitor } from './SystemMonitor';
 import { WwLoading } from './WwLoading';
 import { WwFloatingMenu } from './WwFloatingMenu';
 import { conversationStore } from '../stores/ConversationStore';
@@ -26,6 +27,8 @@ export function WwShell() {
   const [terminalOpen, setTerminalOpen] = useState(false);
   const [modelConfigOpen, setModelConfigOpen] = useState(false);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
+  const activeThreadIdRef = useRef<string | null>(null);
+  activeThreadIdRef.current = activeThreadId;
   const [skillPanelVisible, setSkillPanelVisible] = useState(false);
   const [, forceRender] = useState(0);
 
@@ -115,9 +118,10 @@ export function WwShell() {
   useEffect(() => {
     const handler = (e: Event) => {
       const { skillId } = (e as CustomEvent).detail;
-      if (skillId && activeThreadId) {
+      var tid = activeThreadIdRef.current;
+      if (skillId && tid) {
         if (effectiveSkillId !== skillId) {
-          kernel.activateSkill(skillId, activeThreadId);
+          kernel.activateSkill(skillId, tid);
         }
         setSkillPanelVisible(true);
       }
@@ -183,19 +187,38 @@ export function WwShell() {
           {activeTab === 'system' && (
             <SystemPage onOpenModelConfig={() => setModelConfigOpen(true)} />
           )}
+          {activeTab === 'monitor' && (
+            <div className="flex-1 min-h-0 overflow-auto">
+              <SystemMonitor />
+            </div>
+          )}
         </div>
 
         {/* Intent bar — home has inline chat, skills/system don't need it */}
-        {activeTab !== 'home' && activeTab !== 'skills' && (
+        {activeTab !== 'home' && activeTab !== 'skills' && activeTab !== 'system' && activeTab !== 'monitor' && (
           <div className="flex-shrink-0 border-t">
             <WwIntent />
           </div>
         )}
 
-        {/* Terminal */}
+        {/* Terminal / Log Viewer — draggable height */}
         {terminalOpen && (
-          <div className="flex-shrink-0 border-t animate-slide-up" style={{ height: 200 }}>
-            <WwTerminal />
+          <div className="flex-shrink-0 border-t animate-slide-up relative" style={{ height: 300, minHeight: 100, maxHeight: '80vh' }}
+            ref={el => {
+              if (!el) return;
+              let startY = 0, startH = 0;
+              const handle = el.querySelector('.log-drag-handle') as HTMLElement;
+              if (!handle) return;
+              handle.onmousedown = (e) => {
+                startY = e.clientY; startH = el.offsetHeight;
+                document.body.style.cursor = 'ns-resize'; document.body.style.userSelect = 'none';
+                const onMove = (ev: MouseEvent) => { el.style.height = Math.max(100, Math.min(window.innerHeight*0.8, startH + startY - ev.clientY)) + 'px'; };
+                const onUp = () => { document.body.style.cursor = ''; document.body.style.userSelect = ''; document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); };
+                document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp);
+              };
+            }}>
+            <div className="log-drag-handle absolute top-0 left-0 right-0 h-1 cursor-ns-resize hover:bg-primary/30 z-10" />
+            <LogViewer />
           </div>
         )}
       </div>

@@ -10,6 +10,7 @@ import dev.langchain4j.model.chat.response.ChatResponse;
 import com.wuwei.bus.EventBus;
 import com.wuwei.bus.event.KernelEvent;
 import com.wuwei.gate.AstAuditor;
+import com.wuwei.rag.SkillIndexer;
 import com.wuwei.gate.EcosystemGuardian;
 import com.wuwei.gate.GateException;
 import com.wuwei.skill.SkillGenome;
@@ -63,6 +64,7 @@ public class SkillGenerator {
     private final AstAuditor astAuditor;
     private final EcosystemGuardian guardian;
     private final SkillManager skillManager;
+    private final SkillIndexer skillIndexer;
     private final SnapshotService snapshotService;
     private final EventBus eventBus;
     private final ObjectMapper mapper;
@@ -76,7 +78,8 @@ public class SkillGenerator {
                           SkillMemoryService memoryService, StoreService storeService,
                           Normalizer normalizer,
                           AstAuditor astAuditor, EcosystemGuardian guardian,
-                          SkillManager skillManager, SnapshotService snapshotService,
+                          SkillManager skillManager, SkillIndexer skillIndexer,
+                          SnapshotService snapshotService,
                           EventBus eventBus, ObjectMapper mapper,
                           ConversationService conversationService,
                           BiConsumer<String, Map<String, Object>> onMessageUpdate,
@@ -88,6 +91,7 @@ public class SkillGenerator {
         this.astAuditor = astAuditor;
         this.guardian = guardian;
         this.skillManager = skillManager;
+        this.skillIndexer = skillIndexer;
         this.snapshotService = snapshotService;
         this.eventBus = eventBus;
         this.mapper = mapper;
@@ -216,13 +220,35 @@ public class SkillGenerator {
 
             String provider = routing.getOrDefault("provider", "");
 
+            // ── RAG: find similar skills for reference ──
+            String ragContext = "";
+            if (skillIndexer != null) {
+                try {
+                    var similar = skillIndexer.search(intent, 3);
+                    if (!similar.isEmpty()) {
+                        var sb = new StringBuilder();
+                        sb.append("现有技能参考（可复用其代码模式）：\n");
+                        for (var s : similar) {
+                            sb.append("- ").append(s.get("skillId"))
+                              .append(" (相关度 ").append(s.get("relevance")).append("): ")
+                              .append(s.get("reason")).append("\n");
+                        }
+                        ragContext = sb.toString();
+                        System.out.println("[kernel] [generate] RAG found " + similar.size() + " similar skills");
+                    }
+                } catch (Exception e) {
+                    log.warn("RAG retrieval failed: {}", e.getMessage());
+                }
+            }
+
             // ── Phase 1: PLAN ──
             genLog(threadId, genMsgId, "plan", "", "分析需求，制定计划...");
             PlannerAgent planner = agentFactory.createPlannerAgent(modelOverride);
             System.out.println("[kernel] [generate] Planner starting, provider=" + provider);
             stepUpdate(threadId, genMsgId, "generating", "生成技能代码", "in_progress", "制定计划中...");
 
-            String planText = planner.plan(userMessage);
+            String planMessage = ragContext.isEmpty() ? userMessage : ragContext + "\n用户需求: " + userMessage;
+            String planText = planner.plan(planMessage);
             System.out.println("[kernel] [generate] Plan: " + planText);
             Plan plan = parsePlan(planText);
             if (plan == null) {

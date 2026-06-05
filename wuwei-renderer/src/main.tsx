@@ -12,6 +12,15 @@ if ('Notification' in window && Notification.permission === 'default') {
 kernel.init();
 initBridge();
 
+// Forward browser console to kernel render-log
+['log','warn','error'].forEach(function(lvl) {
+  var orig = (console as any)[lvl];
+  (console as any)[lvl] = function() {
+    orig.apply(console, arguments);
+    try { kernel.sendRenderLog(lvl, Array.from(arguments).join(' ')); } catch(e) {}
+  };
+});
+
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <App />

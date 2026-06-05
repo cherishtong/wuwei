@@ -19,6 +19,8 @@ cd wuwei-core
 # Use Gradle 9.3.1 (not project gradlew): D:\codesoft\gradle-9.3.1\bin\gradle.bat
 gradle.bat nativeCompile --no-daemon    # Full native image → build/native/nativeCompile/wuwei-kernel.exe
 gradle.bat build --no-daemon            # Fat JAR + tests
+gradle.bat test --no-daemon             # Run tests only
+gradle.bat test --no-daemon --tests "com.wuwei.bus.EventBusTest"  # Single test class
 
 # Native build requires VS 2026 DevShell:
 # Import-Module "C:\Program Files\Microsoft Visual Studio\18\Insiders\Common7\Tools\Microsoft.VisualStudio.DevShell.dll"
@@ -36,6 +38,45 @@ cargo tauri dev                      # Tauri desktop (spawns kernel as sidecar)
 ## Architecture
 
 Kernel is Helidon SE 4.1 WebSocket server on `127.0.0.1`. Renderer is Tauri 2 desktop shell hosting React 19 SPA. Communication over WebSocket.
+
+### Data flow (frontend ↔ kernel)
+
+```
+Browser/Tauri ←→ Vite SPA ←→ kernel.ts ←→ WebSocket ←→ WsServer (Helidon)
+                              ↑                       ↓
+                          bridge.ts              MessageRouter
+                         (CustomEvent              user-intent, handle-event,
+                      dispatch to React)          activate-skill, install-skill,
+                                                  refine-skill, list-skills,
+                                                  get-skill-source...)
+```
+
+Kernel messages carry a `ns` field for namespace routing on the frontend:
+| ns | Store | Purpose |
+|----|-------|---------|
+| `sys` | `SystemStore` | kernel-ready, skill-list, gate-request, system-notify, model-routing |
+| `ui` | `SurfaceStore` | skill-activated, skill-deactivated |
+| `log` | `ConsoleStore` | plan-step, repair-attempt, skill-log, pi-log |
+
+`bridge.ts` dispatches all WS messages to the appropriate store's `dispatch()` method, which updates internal state and notifies listeners. Components subscribe via each store's `onChange()`.
+
+## wuwei-core (kernel) packages
+
+| Package | Role |
+|---|---|
+| `com.wuwei` | `Main` — manual DI, wires all components |
+| `bus` | `WsServer` (Helidon WS), `MessageRouter` (type-based dispatch), `EventBus` (broadcast + token-bucket) |
+| `bus.event` | `KernelEvent` — event type definitions |
+| `skill` | `SkillManager` — lifecycle: load/activate/deactivate/uninstall + file watcher hot-reload. `MdRuntime` — blog/markdown runtime with sidebar config. `BrowserSkillRuntime` — browser-js runtime support. |
+| `sandbox` | `SkillRuntime` — isolated GraalJS `Context`, `HostAccess.NONE`, 10M statement limit. `RuntimePool` for concurrency. No snapshot restore — disk is canonical. |
+| `capability` | `CapabilityManager` + capabilities: `NetworkCapability`, `FileCapability`, `AiCapability`, `CryptoCapability`, `DatabaseCapability` (SQLite per skill, array params unwrap, results as ProxyArray+ProxyObject), `WebSearchCapability` |
+| `gate` | `AstAuditor` (manifest validity → UI ID contract → acorn.js AST scan), `EcosystemGuardian` |
+| `a2ui` | `A2uiEngine` — flat component tree, patch application. `register()` guards against empty-tree overwrite. |
+| `llm` | `SkillGenerator` (Plan+Execute orchestrator), `PlannerAgent`, `AgentFactory`, `Normalizer`, `OutputParser`. Multiple specialized agents: `SkillGenerateAgent` (streaming), `SkillGenerateSyncAgent` (non-streaming, used by Plan+Execute), `SkillRepairAgent`, `DriftAnalysisAgent`, `AiAskAgent`. `PromptBuilder`, `SummarizingChatMemoryStore`. |
+| `store` | `StoreService` (SQLite+WAL), `SkillStateStore`, `SkillMemoryService`, `ConversationService` (user-AI chat history in registry.db), `OpLogService` |
+| `log` | `LogConfig` — zero-dependency dated file logging to `~/.wuwei/logs/kernel/` and `~/.wuwei/logs/render/`. stdout/stderr tee'd to daily files + console. |
+| `rag` | `SkillIndexer` — LLM-based skill metadata extraction, builds `~/.wuwei/skill-index.json`. Supports search across installed skills by capabilities/patterns/functions. `SkillIndex` — data model for the index tree. |
+| `snapshot` | `SnapshotService` — UI tree snapshot save/restore for crash recovery and hot reload. `SkillSnapshot` — snapshot data model. |
 
 ### Skill generation pipeline (Plan+Execute)
 
@@ -55,55 +96,57 @@ Key files for generation:
 - `PlannerAgent.java` — AiServices interface with inline wuwei technical context
 - `Plan.java` — record(skillId, runtime, capabilities, files)
 - `SkillGenerator.java` — `generateViaLlm()` orchestrates Plan→Execute→Audit
+- `SkillGenerateSyncAgent.java` — synchronous AiServices agent (avoids streaming tool-call bugs)
 - Deleted: `SkillReActAgent.java`, `DeepSeekToolCallFixChatModel.java`, `ReasoningContentChatModel.java`, `ToolCallLoopException.java`
 
-### Data flow (frontend ↔ kernel)
+### Skill index / RAG system
 
-```
-Browser/Tauri ←→ Vite SPA ←→ kernel.ts ←→ WebSocket ←→ WsServer (Helidon)
-                              ↑                       ↓
-                          bridge.ts              MessageRouter
-                         (CustomEvent              user-intent, handle-event,
-                      dispatch to React)          activate-skill, install-skill,
-                                                  refine-skill, list-skills,
-                                                  get-skill-source...)
-```
+On install/update, `SkillIndexer` reads skill genome files and uses LLM to extract structured metadata: capabilities, design patterns, function summaries, component summaries. The master index is stored at `~/.wuwei/skill-index.json`. On startup, `addQuick()` registers skills with name+capabilities only (no LLM call); `rebuildAll()` fills in full metadata. `search()` uses LLM to find top-K relevant skills for a user query.
 
-### wuwei-core (kernel) packages
+### Logging system
 
-| Package | Role |
-|---|---|
-| `com.wuwei` | `Main` — manual DI, wires all components |
-| `bus` | `WsServer` (Helidon WS), `MessageRouter` (type-based dispatch), `EventBus` (broadcast + token-bucket) |
-| `bus.event` | `KernelEvent` — event type definitions |
-| `skill` | `SkillManager` — lifecycle: load/activate/deactivate/uninstall + file watcher hot-reload. Lifecycle hooks: `onInstall` (once), `onActivate`/`onInit`, `onDeactivate`, `onUninstall` |
-| `sandbox` | `SkillRuntime` — isolated GraalJS `Context`, `HostAccess.NONE`, 10M statement limit. No snapshot restore — disk is canonical. |
-| `capability` | `CapabilityManager` + capabilities: `NetworkCapability`, `FileCapability`, `AiCapability`, `CryptoCapability`, `DatabaseCapability` (SQLite per skill, array params unwrap, results as ProxyArray+ProxyObject) |
-| `gate` | `AstAuditor` (manifest validity → UI ID contract → acorn.js AST scan), `EcosystemGuardian` |
-| `a2ui` | `A2uiEngine` — flat component tree, patch application. `register()` guards against empty-tree overwrite. |
-| `llm` | `SkillGenerator` (Plan+Execute), `PlannerAgent`, `AgentFactory`, `Normalizer`, `OutputParser` |
-| `store` | `StoreService` (SQLite+WAL), `SkillStateStore`, `SkillMemoryService` |
+`LogConfig.init()` is called on kernel startup:
+- Redirects `java.util.logging` to daily files in `~/.wuwei/logs/kernel/YYYY-MM-DD.log`
+- stdout/stderr tee'd via `TeeStream` — writes to both original console AND daily log
+- Frontend `LogViewer` reads logs via `kernel.getLog(source, date)` → `log-content` CustomEvent
+- Frontend console.log/warn/error forwarded to kernel via `kernel.sendRenderLog()` → `~/.wuwei/logs/render/YYYY-MM-DD.log`
+- Log viewer uses virtual scrolling (line-height 18px, 20-line overscan) with auto-refresh for today's logs
 
-### wuwei-renderer (frontend) layers
+### Snapshot / crash recovery
+
+`SnapshotService` persists UI tree + state summary to `snapshot.db` on skill deactivation/errors. On startup/restore, the last snapshot is loaded and sent to the frontend to restore workspace state.
+
+## wuwei-renderer (frontend) layers
 
 | Layer | Path | What |
 |-------|------|------|
 | shadcn/ui | `src/wv-components/ui/` | 46 primitives (Button, Card, Dialog, Pagination, Accordion...) |
 | A2UI catalog | `src/wv-components/a2ui/` | Components via `createComponentImplementation`. **Pagination** supports A2UI `action` dispatch + DataModel binding |
-| App shell | `src/components/` | WwShell, WwSidebar, WwWorkspace, SkillsPage, SystemPage |
-| Runtime | `src/runtime/` | BrowserRuntime, ProxyCapabilities, ThreeJsCapability |
+| App shell | `src/components/` | WwShell, WwSidebar, WwWorkbench, WwWorkspace, WwChat, SkillsPage, SystemPage, LogViewer, SystemMonitor, SkillPanel |
+| Runtime | `src/runtime/` | BrowserRuntime, ProxyCapabilities, LocalCapabilities, ThreeJsCapability |
+| Stores | `src/stores/` | SurfaceStore (ui ns), SystemStore (sys ns), ConsoleStore (log ns), ConversationStore (chat messages) |
+| Contexts | `src/contexts/` | ThemeContext — dark/light theme resolved from system preference + user toggle |
+
+### Browser runtime sandboxing
+
+`BrowserRuntime` loads skill `handlers.js` in-browser using a `Function`-scoped sandbox. Dangerous globals (`document`, `fetch`, `WebSocket`, `Worker`, `process`, `require`) are shadowed as `undefined`. A safe `document` proxy allows only `getElementById`/`createElement`/`querySelector`. A safe `window` proxy allows only `__wuwei_*` bridge properties, `ResizeObserver`, and `requestAnimationFrame`. THREE.js is injected via `__setT__` for 3D skills.
+
+`LocalCapabilities` provides `c.ui.set`/`c.ui.get` with a local patch buffer; patches are flushed to kernel after each handler call. `ProxyCapabilities` bridges database/file/network calls to kernel via `capability-proxy` WebSocket messages. `ThreeJsCapability` wraps THREE.js for 3D rendering skills.
 
 ### Key files
 
-- **`src/kernel.ts`** — WebSocket client singleton. `sendIntent`, `activateSkill`, `handleEvent` helpers.
-- **`src/bridge.ts`** — WS message → `window.dispatchEvent(CustomEvent)`.
-- **`src/components/WwWorkspace.tsx`** — Core A2UI renderer. `ActionListener` routes component actions → `kernel.handleEvent`.
-- **`src/wv-components/a2ui/Pagination.tsx`** — Pagination A2UI component with action dispatch + DataModel path binding.
+- **`src/kernel.ts`** — WebSocket client singleton. `sendIntent`, `activateSkill`, `handleEvent` helpers. Namespace routing via `nsHandlers` Map. Request/response pattern with `correlationId` + timeout.
+- **`src/bridge.ts`** — WS message → `CustomEvent` dispatch + store dispatch by `ns` field.
+- **`src/components/WwWorkbench.tsx`** — Main layout: sidebar + workspace. Manages skill loading state, gate dialogs, system notifications.
+- **`src/components/WwWorkspace.tsx`** — Core A2UI renderer. `ActionListener` routes component actions → `kernel.handleEvent`. `applyPatches` merges component patches.
+- **`src/components/WwShell.tsx`** — Root shell: titlebar + resizable layout + floating menu.
+- **`src/components/LogViewer.tsx`** — Virtual-scrolling log viewer for kernel/render logs with date picker and auto-refresh.
+- **`src/components/SystemMonitor.tsx`** — Real-time system dashboard: heap chart, GC stats, WS sessions, skill capabilities, process list.
 - **`src/stores/ConversationStore.ts`** — Message store with streaming `log` entries for GenerationCard.
 
 ### Key patterns
 
-- **A2UI components** use `createComponentImplementation(ComponentApi, RenderComponent)` from `@a2ui/react/v0_9`.
+- **A2UI components** use `createComponentImplementation(ComponentApi, RenderComponent)` from `@a2ui/react/v0_10`.
 - **DataModel binding**: Components accept `{"path": "/key"}` for value bindings. `z.union([z.number(), z.object({path: z.string()})])` in schemas.
 - **Action dispatch**: Interactive components use `context.dispatchAction({event: {name, context}})` — A2UI framework auto-adds `surfaceId` and `sourceComponentId`.
 - **GenerationCard**: Shows streaming log entries (createFile, readFile, validate...) in real-time via `genLog()` → `pushGenerationCard()`.
@@ -206,8 +249,22 @@ kernel: c.ui.set("id","prop",val)
   → React useSyncExternalStore → re-render
 ```
 
+#### 8. Browser-runtime patch flow (browser-js skills)
+
+```
+c.ui.set("id","prop",val)
+  → LocalCapability: componentCache[id][prop] = val, patchBuffer.push({id, prop:val})
+  → handler returns → BrowserRuntime.flushPatches() sends patches via WS to kernel
+  → kernel: same pipeline as above
+```
+
 ### Tauri
 
 - Config: `src-tauri/tauri.conf.json` — `devUrl: http://localhost:5176`, `decorations: false`, identifier `com.wuwei.shell`.
 - Kernel dev path: `../../wuwei-core/build/native/nativeCompile/wuwei-kernel.exe`.
 - Vite dev server on port 5176 (configured in `vite.config.ts`).
+- Dev mode: frontend connects to kernel via `VITE_KERNEL_PORT` env var (default 49200). Prod mode: uses Tauri `invoke('get_kernel_port')`.
+
+### MdRuntime (blog/markdown skills)
+
+`MdRuntime` enables blog-like skills with markdown content. The kernel generates only the content area (Text component). The sidebar is rendered by the frontend using shadcn/ui Sidebar components, configured via `sidebar.json` in the skill genome. Supports arbitrary nesting of menu items. Handlers store `.md` content in `c.storage` on init and switch content on sidebar clicks.

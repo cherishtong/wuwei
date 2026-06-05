@@ -8,6 +8,8 @@ const proxyToReal = new WeakMap<object, object>();
 
 function unwrap(obj: unknown): unknown {
   if (obj === null || typeof obj !== 'object') return obj;
+  // Recursively unwrap arrays
+  if (Array.isArray(obj)) return (obj as unknown[]).map(unwrap);
   return proxyToReal.get(obj as object) ?? obj;
 }
 
@@ -119,6 +121,14 @@ const THREENS = {
     return wrap(new THREE.ShaderMaterial(opts));
   },
 
+  // Core constructors
+  Scene() { return wrap(new THREE.Scene()); },
+  PerspectiveCamera(fov: number, aspect: number, near: number, far: number) {
+    return wrap(new THREE.PerspectiveCamera(fov, aspect, near, far));
+  },
+  WebGLRenderer(opts?: object) { return wrap(new THREE.WebGLRenderer(opts as any)); },
+  CanvasTexture(canvas: HTMLCanvasElement) { return wrap(new THREE.CanvasTexture(canvas)); },
+
   // Mesh
   Mesh(geometry: object, material: object) {
     return wrap(new THREE.Mesh(unwrap(geometry) as THREE.BufferGeometry, unwrap(material) as THREE.Material));
@@ -201,6 +211,7 @@ type ThreeJsScene = {
   camera: object;
   renderer: object;
   controls: object;
+  canvas: HTMLCanvasElement;
   THREE: typeof THREENS;
   render(): void;
   animate(callback: () => void): void;
@@ -246,6 +257,7 @@ function createScene(
     camera: wrap(camera),
     renderer: wrap(renderer),
     controls: wrap(controls),
+    canvas: canvas,
     THREE: THREENS,
     render() {
       controls.update();

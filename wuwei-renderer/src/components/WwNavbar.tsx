@@ -1,6 +1,6 @@
 import { useTheme } from '../contexts/ThemeContext';
 
-export type NavTab = 'home' | 'skills' | 'system';
+export type NavTab = 'home' | 'skills' | 'system' | 'monitor';
 
 interface NavbarProps {
   activeTab: NavTab;
@@ -11,6 +11,7 @@ const tabs: { id: NavTab; label: string }[] = [
   { id: 'home', label: '会话' },
   { id: 'skills', label: '技能' },
   { id: 'system', label: '系统' },
+  { id: 'monitor', label: '监控' },
 ];
 
 export function WwNavbar({ activeTab, onTabChange }: NavbarProps) {

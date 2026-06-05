@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.wuwei.a2ui.A2uiEngine;
 import com.wuwei.bus.EventBus;
+import com.wuwei.log.LogConfig;
+import com.wuwei.rag.SkillIndexer;
 import com.wuwei.bus.MessageRouter;
 import com.wuwei.bus.WsServer;
 import com.wuwei.capability.AiCapability;
@@ -47,6 +49,9 @@ public class Main {
                 break;
             }
         }
+
+        // Init logging to dated files before anything else
+        LogConfig.init();
 
         // ── Wire up all components manually ─────────────────────
         ObjectMapper mapper = new ObjectMapper();
@@ -109,10 +114,13 @@ public class Main {
         SnapshotService snapshotService = new SnapshotService(storeService, stateStore, mapper);
         ConversationService conversationService = new ConversationService(storeService, mapper);
 
+        // RAG: PageIndex-style skill indexer for LLM-based retrieval
+        SkillIndexer skillIndexer = new SkillIndexer(mapper, agentFactory);
+
         SkillManager skillManager = new SkillManager(
             runtimePool, a2uiEngine, capManager, storeService,
             stateStore, eventBus, mapper, astAuditor, guardian, snapshotService,
-            conversationService
+            conversationService, skillIndexer
         );
         skillManager.startupLoad();
 
@@ -122,7 +130,8 @@ public class Main {
         SkillGenerator skillGenerator = new SkillGenerator(
             agentFactory, memoryService, storeService,
             normalizer, astAuditor, guardian,
-            skillManager, snapshotService, eventBus, mapper,
+            skillManager, skillIndexer, snapshotService,
+            eventBus, mapper,
             conversationService, null,
             loadMaxRepairAttempts(mapper)
         );
@@ -140,6 +149,13 @@ public class Main {
 
         PORT = wsServer.getPort();
         System.out.println("WUWEI_PORT:" + PORT);
+
+        // Rebuild skill index (PageIndex-style) in background
+        new Thread(() -> {
+            try { Thread.sleep(3000); } catch (InterruptedException ignored) {}
+            System.out.println("[kernel] Starting skill index rebuild...");
+            skillIndexer.rebuildAll();
+        }, "rag-rebuild").start();
 
         // W9: Graceful shutdown hook — saves snapshots before exit
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {

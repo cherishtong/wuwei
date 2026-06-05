@@ -64,6 +64,21 @@ function parseHandlers(
   const sandboxCode = `
     return (function() {
       ${shadowedGlobals.map((k) => `var ${k} = undefined;`).join('\n      ')}
+      // Safe document proxy for canvas/3D skills — uses captured realDoc reference
+      var realDoc = __sandbox_document__;
+      var document = new Proxy({}, {
+        get: function(__tgt, __prop) {
+          if (__prop === 'getElementById') return function(id) { return realDoc.getElementById(id); };
+          if (__prop === 'createElement') return function(tag) { return realDoc.createElement(tag); };
+          if (__prop === 'createElementNS') return function(ns, tag) { return realDoc.createElementNS(ns, tag); };
+          if (__prop === 'body') return realDoc.body;
+          if (__prop === 'head') return realDoc.head;
+          if (__prop === 'querySelector') return function(sel) { return realDoc.querySelector(sel); };
+          return undefined;
+        },
+        set: function() { return true; }
+      });
+      // Safe window proxy for browser APIs needed by canvas/3D skills
       var window = new Proxy((function(){return this;})() || {}, {
         get: function(__tgt, __prop) {
           var s = String(__prop);
@@ -75,14 +90,17 @@ function parseHandlers(
         },
         set: function() { return true; }
       });
+      // Provide T and THREE globals — populated via __setT__ before handler calls
+      var T = null;
+      var THREE = null;
       ${code}
-      return { ${handlerNames.join(', ')} };
+      return { __setT__: function(t) { T = t; THREE = t; }, ${handlerNames.join(', ')} };
     })();
   `;
 
   try {
-    const factory = new Function(sandboxCode);
-    const result = factory();
+    const factory = new Function('__sandbox_document__', sandboxCode);
+    const result = factory(document);
 
     for (const name of handlerNames) {
       if (typeof result[name] === 'function') {
@@ -90,6 +108,8 @@ function parseHandlers(
         // Wrap to inject capability
         handlers[name] = (inputs: Record<string, unknown>, _cap?: BrowserCapability) => {
           const cap = _cap ?? buildCapability(entry);
+          // Inject T (THREE) global for 3D skills
+          if (result.__setT__ && cap.THREE) result.__setT__(cap.THREE);
           return originalFn(inputs, cap);
         };
       }
@@ -163,7 +183,8 @@ export class BrowserRuntime {
       if (result instanceof Promise) {
         result.then(() => this.flushPatches(entry)).catch((e) => {
           console.error('[BrowserRuntime] Handler error:', e);
-          this.flushPatches(entry);
+          // Flush any patches that were set before the error
+          try { this.flushPatches(entry); } catch (_) {}
         });
       } else {
         this.flushPatches(entry);

@@ -5,11 +5,18 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.wuwei.bus.event.KernelEvent;
 import com.wuwei.capability.CapabilityManager;
 import com.wuwei.llm.AgentFactory;
+import com.wuwei.log.LogConfig;
 import com.wuwei.llm.SkillGenerator;
 import com.wuwei.skill.SkillManager;
 import com.wuwei.store.ConversationService;
 import com.wuwei.store.StoreService;
 import io.helidon.websocket.WsSession;
+import java.lang.management.GarbageCollectorMXBean;
+import java.lang.management.ManagementFactory;
+import java.lang.management.MemoryMXBean;
+import java.lang.management.OperatingSystemMXBean;
+import java.lang.management.RuntimeMXBean;
+import java.lang.management.ThreadMXBean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -37,6 +44,7 @@ public class MessageRouter {
     private final AgentFactory agentFactory;
     private final StoreService storeService;
     private final ConversationService conversationService;
+    private final long startTime = System.currentTimeMillis();
 
     public MessageRouter(ObjectMapper mapper, EventBus eventBus,
                          SkillManager skillManager, CapabilityManager capManager,
@@ -80,6 +88,10 @@ public class MessageRouter {
                 case "get-rate-limit"   -> handleGetRateLimit(session);
                 case "refine-skill"     -> handleRefineSkill(session, msg);
                 case "get-skill-source" -> handleGetSkillSource(session, msg);
+                case "get-metrics"      -> handleGetMetrics(session);
+                case "list-logs"      -> handleListLogs(session, msg);
+                case "get-log"        -> handleGetLog(session, msg);
+                case "render-log"     -> handleRenderLog(session, msg);
                 case "revoke-cap"         -> handleRevokeCap(session, msg);
                 case "capability-proxy" -> handleCapabilityProxy(session, msg);
                 case "set-model-routing" -> handleSetModelRouting(session, msg);
@@ -464,6 +476,150 @@ public class MessageRouter {
             eventBus.publishTo(session, new KernelEvent.KernelError(skillId, "SOURCE_READ_ERROR",
                 "无法读取源代码: " + e.getMessage()));
         }
+    }
+
+    // ── Metrics ──────────────────────────────────────────────────
+
+    private void handleGetMetrics(WsSession session) {
+        try {
+            Runtime rt = Runtime.getRuntime();
+            MemoryMXBean mem = ManagementFactory.getMemoryMXBean();
+            OperatingSystemMXBean os = ManagementFactory.getOperatingSystemMXBean();
+            ThreadMXBean threadBean = ManagementFactory.getThreadMXBean();
+            RuntimeMXBean runtimeBean = ManagementFactory.getRuntimeMXBean();
+            Path skillsDir = Paths.get(System.getProperty("user.home"), ".wuwei", "skills");
+
+            Map<String, Object> metrics = new LinkedHashMap<>();
+            metrics.put("type", "kernel-metrics");
+            metrics.put("uptimeMs", System.currentTimeMillis() - startTime);
+            metrics.put("startTime", runtimeBean.getStartTime());
+
+            // GraalVM image info
+            Map<String, Object> graal = new LinkedHashMap<>();
+            graal.put("vendor", System.getProperty("java.vendor", ""));
+            graal.put("vmName", System.getProperty("java.vm.name", ""));
+            graal.put("vmVersion", System.getProperty("java.vm.version", ""));
+            graal.put("imageKind", System.getProperty("org.graalvm.nativeimage.kind", "unknown"));
+            graal.put("imageCode", System.getProperty("org.graalvm.nativeimage.imagecode", "unknown"));
+            graal.put("inputArgs", runtimeBean.getInputArguments());
+            metrics.put("graalvm", graal);
+
+            // Process
+            Map<String, Object> proc = new LinkedHashMap<>();
+            ProcessHandle ph = ProcessHandle.current();
+            proc.put("pid", ph.pid());
+            proc.put("command", ph.info().command().orElse(""));
+            proc.put("totalMemoryBytes", rt.totalMemory());
+            proc.put("freeMemoryBytes", rt.freeMemory());
+            proc.put("maxMemoryBytes", rt.maxMemory());
+            metrics.put("process", proc);
+
+            // System
+            Map<String, Object> sys = new LinkedHashMap<>();
+            sys.put("availableProcessors", rt.availableProcessors());
+            sys.put("osName", os.getName() + " " + os.getVersion());
+            sys.put("osArch", os.getArch());
+            sys.put("loadAvg", os.getSystemLoadAverage());
+            sys.put("totalPhysicalMB", ((com.sun.management.OperatingSystemMXBean) os).getTotalPhysicalMemorySize() / (1024 * 1024));
+            sys.put("freePhysicalMB", ((com.sun.management.OperatingSystemMXBean) os).getFreePhysicalMemorySize() / (1024 * 1024));
+            sys.put("committedVirtualMB", ((com.sun.management.OperatingSystemMXBean) os).getCommittedVirtualMemorySize() / (1024 * 1024));
+            metrics.put("system", sys);
+
+            // Memory
+            metrics.put("heapUsedMB", mem.getHeapMemoryUsage().getUsed() / (1024 * 1024));
+            metrics.put("heapCommittedMB", mem.getHeapMemoryUsage().getCommitted() / (1024 * 1024));
+            metrics.put("heapMaxMB", mem.getHeapMemoryUsage().getMax() / (1024 * 1024));
+            metrics.put("heapInitMB", mem.getHeapMemoryUsage().getInit() / (1024 * 1024));
+            metrics.put("nonHeapUsedMB", mem.getNonHeapMemoryUsage().getUsed() / (1024 * 1024));
+
+            // GC
+            List<Map<String, Object>> gcList = new ArrayList<>();
+            for (GarbageCollectorMXBean gc : ManagementFactory.getGarbageCollectorMXBeans()) {
+                Map<String, Object> gcInfo = new LinkedHashMap<>();
+                gcInfo.put("name", gc.getName());
+                gcInfo.put("collectionCount", gc.getCollectionCount());
+                gcInfo.put("collectionTimeMs", gc.getCollectionTime());
+                gcList.add(gcInfo);
+            }
+            metrics.put("garbageCollectors", gcList);
+
+            // Threads
+            metrics.put("threadCount", threadBean.getThreadCount());
+            metrics.put("peakThreadCount", threadBean.getPeakThreadCount());
+            metrics.put("daemonThreadCount", threadBean.getDaemonThreadCount());
+            metrics.put("totalStartedThreadCount", threadBean.getTotalStartedThreadCount());
+
+            // Skills
+            metrics.put("activeSkills", skillManager.getActiveCount());
+            metrics.put("loadedSkills", skillManager.getLoadedCount());
+            metrics.put("capabilityStats", skillManager.getCapabilityStats());
+            metrics.put("skillCapabilities", skillManager.getSkillCapabilities());
+            metrics.put("wsSessions", eventBus.getWsServer() != null ? eventBus.getWsServer().getSessionCount() : 0);
+            try {
+                long total = 0; int fileCount = 0;
+                if (Files.isDirectory(skillsDir)) {
+                    try (Stream<Path> walk = Files.walk(skillsDir)) {
+                        var list = walk.filter(Files::isRegularFile).toList();
+                        fileCount = list.size();
+                        total = list.stream().mapToLong(p -> { try { return Files.size(p); } catch (Exception e) { return 0L; } }).sum();
+                    }
+                }
+                metrics.put("skillFileCount", fileCount);
+                metrics.put("skillDiskMB", total / (1024 * 1024));
+            } catch (Exception ignored) {}
+
+            // All related processes
+            List<Map<String, Object>> procs = new ArrayList<>();
+            ProcessHandle.allProcesses().forEach(p -> {
+                String cmd = p.info().command().orElse("").toLowerCase();
+                if (cmd.contains("wuwei") || cmd.contains("tauri") || cmd.contains("vite") || cmd.contains("node")) {
+                    Map<String, Object> pi = new LinkedHashMap<>();
+                    pi.put("pid", p.pid());
+                    pi.put("command", p.info().command().orElse(""));
+                    pi.put("args", String.join(" ", p.info().arguments().orElse(new String[0])));
+                    try { pi.put("cpuMs", p.info().totalCpuDuration().orElse(java.time.Duration.ZERO).toMillis()); } catch (Exception e) { pi.put("cpuMs", 0); }
+                    procs.add(pi);
+                }
+            });
+            metrics.put("relatedProcesses", procs);
+
+            session.send(mapper.writeValueAsString(metrics), true);
+        } catch (Exception e) {
+            sendError(session, "system", "METRICS_ERROR", e.getMessage());
+        }
+    }
+
+    // ── Log viewer ────────────────────────────────────────────────
+
+    private void handleListLogs(WsSession session, JsonNode msg) {
+        String source = msg.has("source") ? msg.get("source").asText() : "kernel";
+        try {
+            String json = mapper.writeValueAsString(Map.of(
+                "type", "log-dates", "source", source,
+                "dates", LogConfig.listDates(source)));
+            session.send(json, true);
+        } catch (Exception e) {
+            sendError(session, "system", "LOG_ERROR", e.getMessage());
+        }
+    }
+
+    private void handleGetLog(WsSession session, JsonNode msg) {
+        String source = msg.has("source") ? msg.get("source").asText() : "kernel";
+        String date = msg.has("date") ? msg.get("date").asText() : LogConfig.today();
+        try {
+            String content = LogConfig.readLog(source, date);
+            String json = mapper.writeValueAsString(Map.of(
+                "type", "log-content", "source", source, "date", date, "content", content));
+            session.send(json, true);
+        } catch (Exception e) {
+            sendError(session, "system", "LOG_ERROR", e.getMessage());
+        }
+    }
+
+    private void handleRenderLog(WsSession session, JsonNode msg) {
+        String level = msg.has("level") ? msg.get("level").asText() : "info";
+        String logMsg = msg.has("message") ? msg.get("message").asText() : "";
+        LogConfig.logRender(level, logMsg);
     }
 
     // ── Model routing ─────────────────────────────────────────────

@@ -4,7 +4,8 @@ import { PrismLight as SyntaxHighlighter } from 'react-syntax-highlighter';
 import jsonLang from 'react-syntax-highlighter/dist/esm/languages/prism/json';
 import jsLang from 'react-syntax-highlighter/dist/esm/languages/prism/javascript';
 import markdownLang from 'react-syntax-highlighter/dist/esm/languages/prism/markdown';
-import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { oneDark, oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { useTheme } from '../contexts/ThemeContext';
 import { Skeleton } from '@/wv-components/ui/skeleton';
 import { FileCode, File, FileText, FileJson, Database, ChevronRight, ChevronDown, Folder, FolderOpen } from 'lucide-react';
 
@@ -133,6 +134,8 @@ function TreeNodeItem({ node, activeFile, onSelect, depth }: { node: TreeNode; a
 
 interface WwWorkbenchProps { onClose: () => void; }
 export function WwWorkbench({ onClose }: WwWorkbenchProps) {
+  const { resolved: theme } = useTheme();
+  const codeStyle = theme === 'dark' ? oneDark : oneLight;
   const [source, setSource] = useState<SkillSource | null>(null);
   const [activeFile, setActiveFile] = useState<string | null>(null);
 
@@ -188,7 +191,7 @@ export function WwWorkbench({ onClose }: WwWorkbenchProps) {
         <div className="flex-1 min-h-0 p-4">
           {activeEntry && previewable && activeEntry.content != null ? (
             <ScrollArea className="h-full">
-              <SyntaxHighlighter language={detectLang(activeEntry.path)} style={oneDark}
+              <SyntaxHighlighter language={detectLang(activeEntry.path)} style={codeStyle}
                 customStyle={{ margin: 0, borderRadius: '0.5rem', fontSize: '0.8125rem', lineHeight: '1.6' }}
                 showLineNumbers>{formatContent(activeEntry.path, activeEntry.content)}</SyntaxHighlighter>
             </ScrollArea>

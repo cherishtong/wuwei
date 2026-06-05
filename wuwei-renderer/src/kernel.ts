@@ -201,6 +201,18 @@ export const kernel = {
   confirmGate(skillId: string, capName: string, approved: boolean) {
     send({ type: 'confirm-gate', skillId, capName, approved });
   },
+  getMetrics() {
+    send({ type: 'get-metrics' });
+  },
+  listLogDates(source: string) {
+    send({ type: 'list-logs', source });
+  },
+  getLog(source: string, date: string) {
+    send({ type: 'get-log', source, date });
+  },
+  sendRenderLog(level: string, message: string) {
+    send({ type: 'render-log', level, message });
+  },
 
   activateSkill(skillId: string, threadId?: string) {
     send({ type: 'activate-skill', skillId, threadId: threadId || null });

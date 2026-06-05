@@ -203,5 +203,33 @@
     "name": "java.lang.reflect.RecordComponent",
     "allDeclaredConstructors": true,
     "allPublicMethods": true
+  },
+  {
+    "name": "com.wuwei.rag.SkillIndex",
+    "allDeclaredConstructors": true,
+    "allPublicConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "com.wuwei.rag.SkillIndex$SkillEntry",
+    "allDeclaredConstructors": true,
+    "allPublicConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "com.wuwei.rag.SkillIndex$FunctionSummary",
+    "allDeclaredConstructors": true,
+    "allPublicConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "com.wuwei.rag.SkillIndex$ComponentSummary",
+    "allDeclaredConstructors": true,
+    "allPublicConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
   }
 ]

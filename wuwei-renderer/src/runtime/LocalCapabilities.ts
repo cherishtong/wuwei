@@ -46,6 +46,22 @@ export function createLocalCapabilities(
             };
             tryDraw();
           },
+          getContext(canvasId: string): CanvasRenderingContext2D | null {
+            const key = `__wuwei_canvas_${canvasId}`;
+            const entry = (window as unknown as Record<string, unknown>)[key] as
+              | { el: HTMLCanvasElement; draw: (cmds: Record<string, unknown>[]) => void }
+              | undefined;
+            if (!entry?.el) return null;
+            // Sync canvas resolution to display size for sharp rendering
+            const rect = entry.el.getBoundingClientRect();
+            if (rect.width > 0 && rect.height > 0) {
+              entry.el.width = Math.round(rect.width * window.devicePixelRatio);
+              entry.el.height = Math.round(rect.height * window.devicePixelRatio);
+              const ctx = entry.el.getContext('2d');
+              if (ctx) ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+            }
+            return entry.el.getContext('2d');
+          },
         }
       : undefined,
     permission: {

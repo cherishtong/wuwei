@@ -35,6 +35,9 @@ public class EventBus {
     public void setWsServer(WsServer ws) {
         this.wsServer = ws;
     }
+    public WsServer getWsServer() {
+        return wsServer;
+    }
 
     public void setRateLimitEnabled(boolean enabled) {
         this.rateLimitEnabled = enabled;
