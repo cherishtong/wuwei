@@ -20,15 +20,26 @@ public class WsServer {
     private static final Logger log = LoggerFactory.getLogger(WsServer.class);
 
     private int port;
+    private final String host;
+    private final Path webRoot;
     private final MessageRouter router;
     private final EventBus eventBus;
     private final Set<WsSession> sessions = ConcurrentHashMap.newKeySet();
     private volatile WebServer server;
 
-    public WsServer(int port, MessageRouter router, EventBus eventBus) {
+    /**
+     * @param host    bind address (127.0.0.1 for local dev, 0.0.0.0 for cloud)
+     * @param port    0 for random port, or fixed for cloud
+     * @param router  message router
+     * @param eventBus event bus
+     * @param webRoot null to skip static file serving; non-null to serve SPA from this dir
+     */
+    public WsServer(String host, int port, MessageRouter router, EventBus eventBus, Path webRoot) {
+        this.host = host;
         this.port = port;
         this.router = router;
         this.eventBus = eventBus;
+        this.webRoot = webRoot;
     }
 
     public void start() {
@@ -66,14 +77,16 @@ public class WsServer {
             }
         };
 
-        // Serve static asset files from ~/.wuwei/skills/*/phenotype/assets/
+        // Serve static skill asset files from ~/.wuwei/skills/*/phenotype/assets/
         Path skillsAssetsDir = Paths.get(System.getProperty("user.home"), ".wuwei", "skills");
 
         server = WebServer.builder()
-            .host("127.0.0.1")
+            .host(host)
             .port(port)
-            .routing(b -> b
-                .get("/skills/{skillId}/assets/{+path}", (req, res) -> {
+            .routing(b -> {
+                // Specific routes MUST come before catch-all
+                b.any("/ws", (req, res) -> { /* handled by WS upgrade */ });
+                b.get("/skills/{skillId}/assets/{+path}", (req, res) -> {
                     String skillId = req.path().pathParameters().get("skillId");
                     String path = req.path().pathParameters().get("path");
                     Path file = skillsAssetsDir.resolve(skillId).resolve("phenotype").resolve("assets").resolve(path);
@@ -82,8 +95,28 @@ public class WsServer {
                     } else {
                         res.status(404).send("Not found");
                     }
-                })
-                .any("/ws", (req, res) -> { /* handled by WS upgrade */ }))
+                });
+                // Static SPA serving (cloud mode) — catch-all, must be registered LAST
+                if (webRoot != null) {
+                    b.get("/{+path}", (req, res) -> {
+                        String path = req.path().pathParameters().get("path");
+                        // If path is empty or has no extension, serve index.html (SPA routing)
+                        Path file = (path == null || path.isEmpty() || !path.contains("."))
+                            ? webRoot.resolve("index.html")
+                            : webRoot.resolve(path);
+                        // SPA fallback: if asset not found, serve index.html
+                        if (!Files.exists(file) || Files.isDirectory(file)) {
+                            file = webRoot.resolve("index.html");
+                        }
+                        if (Files.exists(file)) {
+                            res.send(file);
+                        } else {
+                            res.status(404).send("Not found");
+                        }
+                    });
+                    System.out.println("[WsServer] Static web root: " + webRoot.toAbsolutePath());
+                }
+            })
             .addRouting(WsRouting.builder()
                 .endpoint("/ws", listener))
             .build()

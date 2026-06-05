@@ -1,0 +1,15 @@
+[Unit]
+Description=Wuwei Kernel
+After=network.target
+
+[Service]
+Type=simple
+User=wuwei
+WorkingDirectory=/opt/wuwei
+Environment=WUWEI_API_KEY=sk-xxx
+ExecStart=/usr/bin/java -Xmx512m -jar /opt/wuwei/wuwei-kernel.jar --profile cloud --web-root /opt/wuwei/dist --config /opt/wuwei/wuwei.json
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -4,7 +4,9 @@
   "identifier": "com.wuwei.shell",
   "build": {
     "devUrl": "http://localhost:5176",
-    "frontendDist": "../dist"
+    "frontendDist": "../dist",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
   },
   "app": {
     "windows": [
@@ -23,10 +25,20 @@
   },
   "bundle": {
     "active": true,
-    "targets": "nsis",
+    "targets": "all",
     "icon": [
       "icons/icon.png"
     ],
-    "resources": {}
+    "resources": {
+      "binaries/*": "binaries/"
+    },
+    "linux": {
+      "deb": {
+        "depends": ["libwebkit2gtk-4.1-0", "libgtk-3-0", "libjavascriptcoregtk-4.1-0"]
+      }
+    },
+    "macOS": {
+      "minimumSystemVersion": "11.0"
+    }
   }
 }

@@ -1,0 +1,10 @@
+{
+  "version": "6.4.0",
+  "llm": {
+    "provider": "deepseek",
+    "model": "deepseek-v4-pro",
+    "apiKeyEnv": "WUWEI_API_KEY",
+    "apiKey": ""
+  },
+  "logLevel": "info"
+}

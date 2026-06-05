@@ -1,6 +1,7 @@
 // kernel.ts — WebSocket connection to Wuwei Kernel
-// Dev mode: connects to port from VITE_KERNEL_PORT (default 49200)
-// Prod mode (Tauri): uses invoke('get_kernel_port') and listens for kernel events
+// Cloud mode: VITE_KERNEL_URL env var (e.g. /ws for same-origin, or wss://host/ws)
+// Dev mode:   VITE_KERNEL_PORT env var (default 49200) → ws://127.0.0.1:{port}/ws
+// Prod mode:  Tauri sidecar invoke('get_kernel_port') → ws://127.0.0.1:{port}/ws
 
 let ws: WebSocket | null = null;
 const queue: string[] = [];
@@ -24,33 +25,53 @@ function request(msg: Record<string, unknown>, timeoutMs = 30000): Promise<Recor
   });
 }
 
-async function getPort(): Promise<number> {
+/**
+ * Resolve the kernel WebSocket URL.
+ * Priority: VITE_KERNEL_URL > Tauri sidecar > VITE_KERNEL_PORT > default 49200
+ */
+async function getKernelUrl(): Promise<string> {
+  // ① Cloud mode: VITE_KERNEL_URL is set (e.g. /ws for same-origin, or full wss:// URL)
+  const envUrl = import.meta.env.VITE_KERNEL_URL;
+  if (envUrl) {
+    // If it's a relative path (starts with /), construct from current location
+    if (envUrl.startsWith('/')) {
+      const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      return `${proto}//${location.host}${envUrl}`;
+    }
+    return envUrl;
+  }
+
+  // ② Tauri desktop mode — kernel port from sidecar
   try {
     if (window.__TAURI_INTERNALS__) {
       isTauri = true;
       const { invoke } = await import('@tauri-apps/api/core');
-      return await invoke<number>('get_kernel_port');
+      const port = await invoke<number>('get_kernel_port');
+      return `ws://127.0.0.1:${port}/ws`;
     }
   } catch {
-    // not in Tauri, fall through to env var
+    // not in Tauri, fall through
   }
-  return parseInt(import.meta.env.VITE_KERNEL_PORT ?? '49200');
+
+  // ③ Local Vite dev mode — VITE_KERNEL_PORT env var
+  const port = parseInt(import.meta.env.VITE_KERNEL_PORT ?? '49200');
+  return `ws://127.0.0.1:${port}/ws`;
 }
 
 async function connect() {
-  let port: number;
+  let url: string;
   try {
-    port = await getPort();
+    url = await getKernelUrl();
   } catch {
     // kernel not ready yet, retry in 1s
     reconnectTimer = setTimeout(connect, 1000);
     return;
   }
 
-  ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+  ws = new WebSocket(url);
 
   ws.onopen = () => {
-    console.log(`[kernel] connected to port ${port}`);
+    console.log(`[kernel] connected: ${url}`);
     send({ type: 'list-skills' });
     flushQueue();
   };

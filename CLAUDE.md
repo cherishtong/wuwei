@@ -268,3 +268,132 @@ c.ui.set("id","prop",val)
 ### MdRuntime (blog/markdown skills)
 
 `MdRuntime` enables blog-like skills with markdown content. The kernel generates only the content area (Text component). The sidebar is rendered by the frontend using shadcn/ui Sidebar components, configured via `sidebar.json` in the skill genome. Supports arbitrary nesting of menu items. Handlers store `.md` content in `c.storage` on init and switch content on sidebar clicks.
+
+## Cloud deployment (web mode)
+
+Wuwei supports two deployment modes: **local** (Tauri desktop) and **cloud** (JVM server + browser).
+
+### Architecture (cloud mode)
+
+```
+Browser ──HTTPS──▶ Nginx/Caddy ──HTTP──▶ Kernel :8080
+                        │                    ├── /          → dist/ SPA
+                        │                    └── /ws        → WebSocket
+                        └── TLS termination (recommended)
+```
+
+The kernel serves both the SPA static files and WebSocket on the same port — zero CORS issues. Skills run in the JVM GraalJS sandbox on the server. `BrowserRuntime` / `browser-js` skills are not supported in cloud mode (they require browser DOM).
+
+### Kernel CLI arguments
+
+```
+java -jar wuwei-kernel.jar [options]
+
+Options:
+  --profile <local|cloud>   Deployment profile. cloud = 0.0.0.0:8080 + serve SPA.
+  --host <addr>             Bind address (default: 127.0.0.1)
+  --port <n>                Fixed port (default: 0 = random; cloud profile defaults to 8080)
+  --web-root <dir>          Serve SPA static files from this directory
+  --config <path>           Path to wuwei.json
+```
+
+### Run modes
+
+```bash
+# ① Local dev — frontend on Vite :5176, kernel WS on :49200
+cd wuwei-core && java -jar wuwei-kernel.jar --port 49200
+cd wuwei-renderer && npm run dev          # reads VITE_KERNEL_PORT=49200 from .env.development
+
+# ② Cloud — single JAR serves both SPA + WS on :8080
+java -jar wuwei-kernel.jar --profile cloud
+
+# ③ Cloud with explicit paths
+java -jar wuwei-kernel.jar --host 0.0.0.0 --port 8080 --web-root ./dist
+```
+
+### Environment variables (frontend build-time)
+
+| Variable | File | Value |
+|----------|------|-------|
+| `VITE_KERNEL_URL` | `.env.production` | `/ws` — relative path for same-origin cloud deployment |
+| `VITE_KERNEL_PORT` | `.env.development` | `49200` — local dev kernel port |
+
+The `VITE_KERNEL_URL` takes priority over all other discovery methods. If it starts with `/`, the proto + host are resolved from `location` (supports both HTTP and HTTPS). Full URLs (`wss://host/ws`) are used verbatim.
+
+### CI/CD (GitHub Actions)
+
+Two workflows in `.github/workflows/`:
+
+| Workflow | Trigger | What |
+|----------|---------|------|
+| `ci.yml` | PR → main, push to main | Compile Java + test + frontend type-check + build |
+| `release.yml` | Tag `v*` or manual | Full matrix: fat JAR + native images (ubuntu/windows/macos) + Tauri installer (Windows) + GitHub Release |
+
+Release artifacts per platform:
+
+| Artifact | Platform | Type |
+|----------|----------|------|
+| `wuwei-cloud-{v}.tar.gz` / `.zip` | Any (JDK 21) | Cloud: JAR + dist + start script |
+| `wuwei-desktop-linux-x64-{v}.tar.gz` | Linux x64 | Native binary |
+| `wuwei-desktop-macos-arm64-{v}.tar.gz` | macOS ARM | Native binary |
+| `Wuwei_*_x64-setup.exe` | Windows x64 | Tauri NSIS installer |
+
+Native image Xmx is configurable: `gradle nativeCompile -PnativeImageXmx=6g` (default 8g, lower for CI runners).
+
+Tauri build (per-platform): kernel native image → copy to `src-tauri/binaries/` → `cargo tauri build --bundles <target>`. Kernel is bundled via `tauri.conf.json` `bundle.resources`. Frontend dist is pre-built and downloaded (skips Tauri's `beforeBuildCommand`).
+
+### Local packaging
+
+```bash
+# Windows (PowerShell)
+.\scripts\package-cloud.ps1
+# → deploy/wuwei-cloud-v6.4.0.zip
+
+# Linux
+./scripts/package-cloud.sh
+# → deploy/wuwei-cloud-v6.4.0.tar.gz
+```
+
+The package contains:
+```
+wuwei-cloud-v6.4.0/
+├── wuwei-kernel.jar       # Fat JAR
+├── dist/                  # Frontend SPA (built with VITE_KERNEL_URL=/ws)
+├── wuwei.json             # Cloud config template (set WUWEI_API_KEY env var)
+├── start.sh               # Linux start script
+└── start.bat              # Windows start script
+```
+
+### Docker
+
+```bash
+docker build -t wuwei-cloud .
+docker run -d -p 8080:8080 -e WUWEI_API_KEY=sk-xxx -v ~/.wuwei:/root/.wuwei wuwei-cloud
+```
+
+### Server deployment (systemd)
+
+```bash
+# 1. Upload package
+scp deploy/wuwei-cloud-v6.4.0.tar.gz user@host:/opt/
+
+# 2. On server
+cd /opt && tar -xzf wuwei-cloud-v6.4.0.tar.gz
+cd wuwei-cloud-v6.4.0
+export WUWEI_API_KEY=sk-xxx
+./start.sh
+
+# 3. Or as systemd service
+sudo cp deploy/cloud/wuwei.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now wuwei
+```
+
+### Frontend build configs
+
+| File | When loaded | Sets |
+|------|-------------|------|
+| `.env.development` | `npm run dev` | `VITE_KERNEL_PORT=49200` |
+| `.env.production` | `npm run build` | `VITE_KERNEL_URL=/ws` |
+
+To build for a custom domain: `VITE_KERNEL_URL=https://mycloud.com/ws npm run build`

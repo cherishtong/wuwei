@@ -40,13 +40,53 @@ public class Main {
     public static int PORT;
 
     private static String configPathOverride = null;
+    private static String host = "127.0.0.1";
+    private static int portOverride = 0;
+    private static String webRoot = null;
+
+    /** Deployment profiles for different environments. */
+    public enum Profile {
+        /** Local development: 127.0.0.1, random port, no static serving (Vite dev server) */
+        LOCAL,
+        /** Cloud production: 0.0.0.0:8080, serve SPA from ./dist, WS on same origin */
+        CLOUD
+    }
+
+    private static void applyProfile(Profile profile) {
+        switch (profile) {
+            case LOCAL:
+                // defaults already set — no change
+                break;
+            case CLOUD:
+                host = "0.0.0.0";
+                portOverride = portOverride > 0 ? portOverride : 8080;
+                if (webRoot == null) {
+                    // Auto-detect: try ./dist (same dir as jar), then ../wuwei-renderer/dist
+                    Path dist = Path.of("dist");
+                    if (Files.isDirectory(dist)) {
+                        webRoot = dist.toAbsolutePath().toString();
+                    } else {
+                        Path rendererDist = Path.of("..", "wuwei-renderer", "dist");
+                        if (Files.isDirectory(rendererDist)) {
+                            webRoot = rendererDist.toAbsolutePath().toString();
+                        }
+                    }
+                }
+                break;
+        }
+    }
 
     public static void main(String[] args) throws Exception {
-        // Parse --config argument
+        // Parse CLI arguments
         for (int i = 0; i < args.length; i++) {
-            if ("--config".equals(args[i]) && i + 1 < args.length) {
-                configPathOverride = args[i + 1];
-                break;
+            switch (args[i]) {
+                case "--config": configPathOverride = args[++i]; break;
+                case "--host": host = args[++i]; break;
+                case "--port": portOverride = Integer.parseInt(args[++i]); break;
+                case "--web-root": webRoot = args[++i]; break;
+                case "--profile":
+                    applyProfile("local".equalsIgnoreCase(args[++i]) ? Profile.LOCAL : Profile.CLOUD);
+                    break;
             }
         }
 
@@ -143,7 +183,11 @@ public class Main {
         skillManager.setOnConvUpdate(threadId -> router.pushConversationUpdate(threadId));
 
         // ── Start WebSocket server (Helidon picks random port) ─
-        WsServer wsServer = new WsServer(0, router, eventBus);
+        WsServer wsServer = new WsServer(
+            host, portOverride,
+            router, eventBus,
+            webRoot != null ? Path.of(webRoot) : null
+        );
         eventBus.setWsServer(wsServer);
         wsServer.start();
 

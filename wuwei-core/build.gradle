@@ -97,7 +97,7 @@ graalvmNative {
             buildArgs.add('-H:+ReportExceptionStackTraces')
             buildArgs.add('--enable-http')
             buildArgs.add('--enable-https')
-            buildArgs.add('-J-Xmx8g')
+            buildArgs.add("-J-Xmx${findProperty('nativeImageXmx') ?: '8g'}")
             // Include resources
             buildArgs.add('-H:IncludeResources=acorn.min.js')
             buildArgs.add('-H:IncludeResources=schema.sql')

@@ -1,0 +1,26 @@
+# Node
+wuwei-renderer/node_modules/
+wuwei-renderer/src-tauri/target/
+
+# Gradle
+wuwei-core/.gradle/
+wuwei-core/build/
+wuwei-core/gradle/
+
+# IDE
+.idea/
+.vscode/
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# Docs
+*.md
+!CLAUDE.md
+
+# Misc
+.claude/
+deploy/
+scripts/

@@ -1,0 +1,72 @@
+# CI — Pull request checks (fast: compile + test + frontend build)
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── Java kernel: compile + test ──
+  kernel:
+    name: Java ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest]   # cloud target; add windows-latest if needed
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: wuwei-core
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.3.1'
+
+      - name: Build fat JAR + run tests
+        run: gradle build --no-daemon
+
+      - name: Upload test report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-report-${{ matrix.os }}
+          path: wuwei-core/build/reports/tests/
+
+  # ── Frontend: build check ──
+  frontend:
+    name: Frontend build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: wuwei-renderer
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: wuwei-renderer/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: TypeScript type-check
+        run: npx tsc --noEmit
+
+      - name: Production build (cloud mode)
+        run: npm run build

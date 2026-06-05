@@ -121,7 +121,8 @@
       "PowerShell(git hash-object -w wuwei-renderer/src/bridge.ts 2>&1)",
       "PowerShell(git log --diff-filter=D --summary HEAD~1..HEAD 2>&1)",
       "PowerShell(git hash-object -w .claude/settings.json 2>&1)",
-      "PowerShell(git log --all --pretty=format:'%H' 2>&1 | ForEach-Object { $null } 2>&1; Write-Host \"---\"; git show 2250cb6:.claude/settings.json 2>&1 | Select-Object -First 3)"
+      "PowerShell(git log --all --pretty=format:'%H' 2>&1 | ForEach-Object { $null } 2>&1; Write-Host \"---\"; git show 2250cb6:.claude/settings.json 2>&1 | Select-Object -First 3)",
+      "PowerShell($gradle = \"D:\\\\codesoft\\\\gradle-9.3.1\\\\bin\\\\gradle.bat\"; cd d:\\\\gitcode\\\\wuwei\\\\wuwei-core; & $gradle compileJava --no-daemon 2>&1)"
     ],
     "additionalDirectories": [
       "C:\\Users\\Administrator\\.wuwei",
