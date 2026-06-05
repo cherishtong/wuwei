@@ -125,7 +125,8 @@
       "PowerShell($gradle = \"D:\\\\codesoft\\\\gradle-9.3.1\\\\bin\\\\gradle.bat\"; cd d:\\\\gitcode\\\\wuwei\\\\wuwei-core; & $gradle compileJava --no-daemon 2>&1)",
       "PowerShell(git remote set-url origin git@github.com:cherishtong/wuwei.git)",
       "PowerShell($gradle = \"D:\\\\codesoft\\\\gradle-9.3.1\\\\bin\\\\gradle.bat\"; cd d:\\\\gitcode\\\\wuwei\\\\wuwei-core; & $gradle compileJava compileTestJava --no-daemon 2>&1)",
-      "PowerShell(git tag v0.0.1-beta)"
+      "PowerShell(git tag v0.0.1-beta)",
+      "PowerShell(git tag -f v0.0.1-beta)"
     ],
     "additionalDirectories": [
       "C:\\Users\\Administrator\\.wuwei",

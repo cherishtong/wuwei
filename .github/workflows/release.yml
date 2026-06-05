@@ -16,7 +16,7 @@ env:
 
 jobs:
   # ═══════════════════════════════════════════════════════════════
-  # 0. Extract version string (v0.0.1-beta → 0.0.1-beta)
+  # 0. Extract version string
   # ═══════════════════════════════════════════════════════════════
   version:
     name: Version
@@ -32,7 +32,7 @@ jobs:
           echo "semver=$(echo "$TAG" | sed 's/^v//')" >> $GITHUB_OUTPUT
 
   # ═══════════════════════════════════════════════════════════════
-  # 1. Shared artifacts (build once, reuse)
+  # 1. Shared artifacts
   # ═══════════════════════════════════════════════════════════════
 
   frontend:
@@ -78,19 +78,34 @@ jobs:
   desktop-linux:
     name: Desktop Linux
     runs-on: ubuntu-latest
-    container: ghcr.io/graalvm/jdk-community:25
     needs: [frontend]
     steps:
       - uses: actions/checkout@v4
 
-      # Tauri system deps (container runs as root, no sudo needed)
       - name: Install Tauri system dependencies
         run: |
-          apt-get update
-          apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
             libappindicator3-dev librsvg2-dev patchelf \
-            libjavascriptcoregtk-4.1-dev libsoup-3.0-dev \
-            curl xz-utils
+            libjavascriptcoregtk-4.1-dev libsoup-3.0-dev
+
+      - name: Set up GraalVM 25
+        uses: graalvm/setup-graalvm@v1
+        with:
+          java-version: '25'
+          distribution: 'graalvm-community'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true
+
+      - name: Manual GraalVM install (fallback)
+        if: failure()
+        run: |
+          URL="https://download.oracle.com/graalvm/25/archive/graalvm-jdk-${{ env.GRAALVM_VERSION }}_linux-x64_bin.tar.gz"
+          curl -fSL "$URL" -o /tmp/graalvm.tar.gz
+          sudo mkdir -p /usr/lib/jvm/graalvm
+          sudo tar -xzf /tmp/graalvm.tar.gz -C /usr/lib/jvm/graalvm --strip-components=1
+          echo "JAVA_HOME=/usr/lib/jvm/graalvm" >> $GITHUB_ENV
+          echo "$JAVA_HOME/bin" >> $GITHUB_PATH
 
       - uses: gradle/actions/setup-gradle@v4
         with: { gradle-version: '9.3.1' }
@@ -113,9 +128,7 @@ jobs:
           cp wuwei-core/build/native/nativeCompile/wuwei-kernel wuwei-renderer/src-tauri/binaries/
 
       - uses: actions/download-artifact@v4
-        with:
-          name: dist
-          path: wuwei-renderer/dist
+        with: { name: dist, path: wuwei-renderer/dist }
 
       - uses: actions/setup-node@v4
         with: { node-version: '22' }
@@ -151,7 +164,6 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
         continue-on-error: true
 
-      # Fallback: manual download if action doesn't have JDK 25 yet
       - name: Manual GraalVM install (fallback)
         if: failure()
         run: |
@@ -184,9 +196,7 @@ jobs:
           cp wuwei-core/build/native/nativeCompile/wuwei-kernel wuwei-renderer/src-tauri/binaries/
 
       - uses: actions/download-artifact@v4
-        with:
-          name: dist
-          path: wuwei-renderer/dist
+        with: { name: dist, path: wuwei-renderer/dist }
 
       - uses: actions/setup-node@v4
         with: { node-version: '22' }
@@ -220,7 +230,6 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
         continue-on-error: true
 
-      # Fallback: manual download
       - name: Manual GraalVM install (fallback)
         if: failure()
         shell: pwsh
@@ -229,8 +238,8 @@ jobs:
           Invoke-WebRequest -Uri $url -OutFile $env:RUNNER_TEMP\graalvm.zip
           Expand-Archive $env:RUNNER_TEMP\graalvm.zip -DestinationPath $env:RUNNER_TEMP\graalvm
           $root = Get-ChildItem $env:RUNNER_TEMP\graalvm | Select-Object -First 1
-          echo "JAVA_HOME=$($root.FullName)" >> $env:GITHUB_ENV
-          echo "$($root.FullName)\bin" >> $env:GITHUB_PATH
+          "JAVA_HOME=$($root.FullName)" >> $env:GITHUB_ENV
+          "$($root.FullName)\bin" >> $env:GITHUB_PATH
 
       - uses: gradle/actions/setup-gradle@v4
         with: { gradle-version: '9.3.1' }
@@ -249,12 +258,15 @@ jobs:
           copy wuwei-core\build\native\nativeCompile\wuwei-kernel.exe wuwei-renderer\src-tauri\binaries\
 
       - uses: actions/download-artifact@v4
-        with:
-          name: dist
-          path: wuwei-renderer/dist
+        with: { name: dist, path: wuwei-renderer/dist }
 
+      # Install npm deps so Tauri's beforeBuildCommand can run
       - uses: actions/setup-node@v4
         with: { node-version: '22' }
+      - name: Install npm dependencies
+        working-directory: wuwei-renderer
+        run: npm ci
+
       - name: Install Rust toolchain
         run: rustup update stable
       - name: Install Tauri CLI
@@ -291,46 +303,35 @@ jobs:
       - name: Pack artifacts
         env:
           V: ${{ needs.version.outputs.semver }}
-          TAG: ${{ needs.version.outputs.tag }}
         run: |
           set -euo pipefail
-          V="$V"
           mkdir -p packages
 
-          # ── Cloud deployment package ──
+          # ── Cloud deployment ──
           PKG="wuwei-cloud-${V}"
           mkdir -p "$PKG/dist"
           cp artifacts/wuwei-kernel-jar/wuwei-kernel.jar "$PKG/"
           cp -r artifacts/dist/* "$PKG/dist/"
-
           cat > "$PKG/wuwei.json" << JSONEOF
-          {
-            "version": "${V}",
-            "llm": { "provider": "deepseek", "model": "deepseek-v4-pro", "apiKeyEnv": "WUWEI_API_KEY", "apiKey": "" },
-            "logLevel": "info"
-          }
+          { "version": "${V}", "llm": { "provider": "deepseek", "model": "deepseek-v4-pro", "apiKeyEnv": "WUWEI_API_KEY", "apiKey": "" }, "logLevel": "info" }
           JSONEOF
-
           cat > "$PKG/start.sh" << 'SHEOF'
           #!/bin/bash
           SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
           exec java -Xmx512m -jar "$SCRIPT_DIR/wuwei-kernel.jar" --profile cloud --web-root "$SCRIPT_DIR/dist" --config "$SCRIPT_DIR/wuwei.json"
           SHEOF
           chmod +x "$PKG/start.sh"
-
           cat > "$PKG/start.bat" << 'BATOF'
           @echo off
           java -Xmx512m -jar "%~dp0wuwei-kernel.jar" --profile cloud --web-root "%~dp0dist" --config "%~dp0wuwei.json"
           BATOF
-
           tar -czf "packages/wuwei-cloud-${V}.tar.gz" "$PKG"
           (cd "$PKG" && zip -r "../packages/wuwei-cloud-${V}.zip" .)
           echo "✓ Cloud packages"
 
-          # ── Standalone native binaries ──
+          # ── Standalone native ──
           for plat in linux-x64 macos-arm64; do
-            dir="artifacts/native-${plat}"
-            bin="$dir/wuwei-kernel"
+            bin="artifacts/native-${plat}/wuwei-kernel"
             if [ -f "$bin" ]; then
               cp "$bin" "packages/wuwei-kernel-${plat}-${V}"
               chmod +x "packages/wuwei-kernel-${plat}-${V}"
@@ -339,21 +340,14 @@ jobs:
             fi
           done
 
-          # ── Tauri installers ──
-          if [ -d artifacts/tauri-windows ]; then
-            cp artifacts/tauri-windows/*.exe packages/ 2>/dev/null || true
-            echo "✓ Tauri Windows"
-          fi
-          if [ -d artifacts/tauri-macos ]; then
-            cp artifacts/tauri-macos/*.dmg packages/ 2>/dev/null || true
-            echo "✓ Tauri macOS"
-          fi
-          if [ -d artifacts/tauri-linux ]; then
-            cp artifacts/tauri-linux/*.deb packages/ 2>/dev/null || true
-            cp artifacts/tauri-linux/*.AppImage packages/ 2>/dev/null || true
-            echo "✓ Tauri Linux"
-          fi
-
+          # ── Tauri ──
+          for p in windows linux macos; do
+            dir="artifacts/tauri-${p}"
+            if [ -d "$dir" ]; then
+              cp "$dir"/* packages/ 2>/dev/null || true
+              echo "✓ Tauri ${p}"
+            fi
+          done
           ls -lh packages/
 
       - name: Create GitHub Release
@@ -367,11 +361,11 @@ jobs:
             ### 🚀 Cloud Deployment
             | File | For |
             |------|-----|
-            | `wuwei-cloud-${{ needs.version.outputs.semver }}.tar.gz` | Linux server |
-            | `wuwei-cloud-${{ needs.version.outputs.semver }}.zip` | Windows server |
+            | `wuwei-cloud-${{ needs.version.outputs.semver }}.tar.gz` | Linux |
+            | `wuwei-cloud-${{ needs.version.outputs.semver }}.zip` | Windows |
             > Requires JDK 21. Run `start.sh` or `start.bat`.
 
-            ### 🖥️ Desktop (Standalone Native)
+            ### 🖥️ Desktop (Native)
             | File | For |
             |------|-----|
             | `wuwei-desktop-linux-x64-${{ needs.version.outputs.semver }}.tar.gz` | Linux x64 |
@@ -380,16 +374,10 @@ jobs:
             ### 🪟🐧🍎 Desktop (Tauri Installers)
             | File | For |
             |------|-----|
-            | `Wuwei_*_x64-setup.exe` | Windows (NSIS) |
-            | `wuwei-shell_*_amd64.deb` | Linux (Debian/Ubuntu) |
-            | `wuwei-shell_*.AppImage` | Linux (portable) |
-            | `Wuwei_*.dmg` | macOS |
-
-            ### 🐳 Docker
-            ```bash
-            docker build -t wuwei-cloud .
-            docker run -d -p 8080:8080 -e WUWEI_API_KEY=sk-xxx -v ~/.wuwei:/root/.wuwei wuwei-cloud
-            ```
+            | `Wuwei_*_x64-setup.exe` | Windows NSIS |
+            | `wuwei-shell_*_amd64.deb` | Linux deb |
+            | `wuwei-shell_*.AppImage` | Linux AppImage |
+            | `Wuwei_*.dmg` | macOS DMG |
           draft: false
           prerelease: true
           files: packages/*
