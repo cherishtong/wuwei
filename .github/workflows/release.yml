@@ -10,6 +10,10 @@ on:
         description: 'Version tag (e.g. v0.0.1-beta)'
         required: true
 
+permissions:
+  contents: write
+  actions: read
+
 env:
   GRAALVM_VERSION: '25.0.2'
   VERSION: ${{ github.ref_type == 'tag' && github.ref_name || inputs.version }}
