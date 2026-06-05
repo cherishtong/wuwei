@@ -70,7 +70,7 @@ fn pick_folder() -> Result<String, String> {
             ("zenity", &["--file-selection", "--directory", "--title=选择 Skill 文件夹"][..]),
             ("kdialog", &["--getexistingdirectory", ""][..]),
         ] {
-            if let Ok(output) = Command::new(cmd).args(args).output() {
+            if let Ok(output) = Command::new(cmd).args(*args).output() {
                 if output.status.success() {
                     let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
                     if !path.is_empty() { return Ok(path); }
