@@ -103,7 +103,7 @@ interface WuweiChatProps {
 	      {hasLog && (<>
 	        <hr style={{ borderColor: 'hsl(var(--border))', opacity: 0.3 }} />
 	        <div ref={scrollRef} className="flex flex-col gap-0.5 max-h-48 overflow-y-auto font-mono text-[11px]">
-	          {log!.map((entry, i) => (
+	          {log!.map((entry: any, i: number) => (
 	            <div key={i} className="flex items-start gap-1.5 leading-relaxed">
 	              <span className="flex-shrink-0 opacity-60" style={{ color: 'hsl(var(--muted-foreground))' }}>{entry.time}</span>
 	              <span className="flex-shrink-0 w-4 text-center">{ICON[entry.action] || '•'}</span>

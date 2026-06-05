@@ -75,7 +75,6 @@ function normalizeMessage(m: any): ChatMessage {
     skillId: m.skillId as string | null | undefined,
     allDone: m.allDone as boolean | undefined,
     error: m.error as string | null | undefined,
-    allDone: m.allDone as boolean | undefined,
     fileProgress: m.fileProgress as string[] | undefined,
   };
 }

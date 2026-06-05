@@ -13,7 +13,7 @@ interface TocItem {
 export function WwBlogToc() {
   const [items, setItems] = useState<TocItem[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
-  const scanTimer = useRef<ReturnType<typeof setTimeout>>();
+  const scanTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   // Scan the content area for headings
   useEffect(() => {

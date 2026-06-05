@@ -12,13 +12,13 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/wv-compon
 import { ChevronRight } from 'lucide-react';
 import { kernel } from '../kernel';
 
-interface MenuItem {
+export interface MenuItem {
   label: string;
   file?: string;
   children?: MenuItem[];
 }
 
-interface SidebarConfig {
+export interface SidebarConfig {
   home?: { label: string; file: string };
   menu?: MenuItem[];
 }

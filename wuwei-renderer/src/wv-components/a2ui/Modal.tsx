@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { z } from 'zod';
 import { createComponentImplementation } from '@a2ui/react/v0_9';
 import * as DialogPrimitive from '@radix-ui/react-dialog';
@@ -42,7 +42,7 @@ function ModalComponent({ props, buildChild }: { props: Record<string, unknown>;
           <DialogPrimitive.Content className={cn(
             "fixed left-[50%] top-[50%] z-50 grid w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 border bg-background p-6 shadow-lg rounded-lg",
           )}>
-            {props.title && <DialogPrimitive.Title className="text-lg font-semibold">{props.title as string}</DialogPrimitive.Title>}
+            {props.title ? <DialogPrimitive.Title className="text-lg font-semibold">{String(props.title)}</DialogPrimitive.Title> : null}
             {props.content ? buildChild(props.content as string) : null}
           </DialogPrimitive.Content>
         </DialogPrimitive.Portal>

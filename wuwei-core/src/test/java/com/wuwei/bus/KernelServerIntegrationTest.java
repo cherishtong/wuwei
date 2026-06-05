@@ -73,21 +73,21 @@ class KernelServerIntegrationTest {
         SkillManager skillManager = new SkillManager(
             runtimePool, a2uiEngine, capManager, storeService,
             stateStore, eventBus, mapper, astAuditor, guardian, snapshotService,
-            conversationService
+            conversationService, null
         );
         skillManager.startupLoad();
         Normalizer normalizer = new Normalizer(mapper);
         SkillGenerator skillGenerator = new SkillGenerator(
             null, memoryService, storeService,
             normalizer, astAuditor, guardian,
-            skillManager, snapshotService, eventBus, mapper,
+            skillManager, null, snapshotService, eventBus, mapper,
             conversationService, null,
             2
         );
         MessageRouter router = new MessageRouter(mapper, eventBus, skillManager, capManager, skillGenerator, null, storeService, conversationService);
 
         // Start WsServer on random port
-        wsServer = new WsServer(0, router, eventBus);
+        wsServer = new WsServer("127.0.0.1", 0, router, eventBus, null);
         eventBus.setWsServer(wsServer);
         wsServer.start();
     }

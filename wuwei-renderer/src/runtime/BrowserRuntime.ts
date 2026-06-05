@@ -109,7 +109,7 @@ function parseHandlers(
         handlers[name] = (inputs: Record<string, unknown>, _cap?: BrowserCapability) => {
           const cap = _cap ?? buildCapability(entry);
           // Inject T (THREE) global for 3D skills
-          if (result.__setT__ && cap.THREE) result.__setT__(cap.THREE);
+          if (result.__setT__ && cap.threejs) result.__setT__(cap.threejs);
           return originalFn(inputs, cap);
         };
       }

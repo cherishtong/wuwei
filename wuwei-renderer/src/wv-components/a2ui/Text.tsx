@@ -100,7 +100,7 @@ function TextComponent({ props }: { props: Record<string, unknown>; buildChild: 
           if (part.type === 'code') {
             var langModule = LANG_MAP[part.lang || ''] || js;
             SyntaxHighlighter.registerLanguage(part.lang || 'text', langModule);
-            return <SyntaxHighlighter key={i} language={part.lang || 'text'} style={codeStyle} customStyle={{ margin: '0.5em 0', borderRadius: '0.5rem', fontSize: '0.8125rem' }} children={part.code} />;
+            return <SyntaxHighlighter key={i} language={part.lang || 'text'} style={codeStyle} customStyle={{ margin: '0.5em 0', borderRadius: '0.5rem', fontSize: '0.8125rem' }}>{part.code || ''}</SyntaxHighlighter>;
           }
           return <span key={i} dangerouslySetInnerHTML={{ __html: part.html || '' }} />;
         })}

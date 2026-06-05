@@ -48,6 +48,7 @@ export interface BrowserCapability {
   };
   canvas?: {
     render(canvasId: string, commands: Record<string, unknown>[]): void;
+    getContext?(canvasId: string): CanvasRenderingContext2D | null;
   };
   threejs?: ThreeJsAPI;
 }

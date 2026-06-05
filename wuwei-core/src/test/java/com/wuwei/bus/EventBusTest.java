@@ -41,7 +41,7 @@ class EventBusTest {
 
     @Test
     void eventAck_shouldSerializeLatencyMs() throws Exception {
-        var event = new KernelEvent.EventAck("skill-a", "query-btn", "ok", 42L);
+        var event = new KernelEvent.EventAck("skill-a", "query-btn", "ok", 42L, List.of());
         String json = serialize(event);
         JsonNode node = mapper.readTree(json);
 

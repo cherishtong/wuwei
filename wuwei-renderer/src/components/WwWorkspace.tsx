@@ -458,7 +458,7 @@ export function WwWorkspace({ activeThreadId, initDetail }: WwWorkspaceProps) {
           <SidebarProvider>
             <WwBlogSidebar
               skillId={blogState.skillId}
-              sidebarConfig={blogState.sidebarConfig as { home?: { label: string; file: string }; menu?: { label: string; file?: string; children?: { label: string; file?: string; children?: unknown[] }[] }[] } | null}
+              sidebarConfig={blogState.sidebarConfig as import('./WwBlogSidebar').SidebarConfig | null}
               activeFile={blogState.activeFile}
               onNavigate={(file) => setBlogState((prev) => prev ? { ...prev, activeFile: file } : null)}
             />
