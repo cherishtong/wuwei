@@ -96,8 +96,15 @@ public class WsServer {
                         res.status(404).send("Not found");
                     }
                 });
-                // Static SPA serving (cloud mode) — catch-all, must be registered LAST
+                // Static SPA serving (cloud mode)
                 if (webRoot != null) {
+                    // Root path — serve index.html
+                    b.get("/", (req, res) -> {
+                        Path indexFile = webRoot.resolve("index.html");
+                        if (Files.exists(indexFile)) res.send(indexFile);
+                        else res.status(404).send("Not found");
+                    });
+                    // Catch-all for SPA assets and routing
                     b.get("/{+path}", (req, res) -> {
                         String path = req.path().pathParameters().get("path");
                         // If path is empty or has no extension, serve index.html (SPA routing)
