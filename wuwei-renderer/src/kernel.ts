@@ -1,7 +1,7 @@
 // kernel.ts — WebSocket connection to Wuwei Kernel
-// Cloud mode: VITE_KERNEL_URL env var (e.g. /ws for same-origin, or wss://host/ws)
-// Dev mode:   VITE_KERNEL_PORT env var (default 49200) → ws://127.0.0.1:{port}/ws
-// Prod mode:  Tauri sidecar invoke('get_kernel_port') → ws://127.0.0.1:{port}/ws
+// Tauri mode:   sidecar invoke('get_kernel_port') → ws://127.0.0.1:{port}/ws
+// Cloud mode:   VITE_KERNEL_URL env var (e.g. /ws for same-origin, or wss://host/ws)
+// Dev mode:     VITE_KERNEL_PORT env var (default 49200) → ws://127.0.0.1:{port}/ws
 
 let ws: WebSocket | null = null;
 const queue: string[] = [];
@@ -27,21 +27,13 @@ function request(msg: Record<string, unknown>, timeoutMs = 30000): Promise<Recor
 
 /**
  * Resolve the kernel WebSocket URL.
- * Priority: VITE_KERNEL_URL > Tauri sidecar > VITE_KERNEL_PORT > default 49200
+ * Priority: Tauri sidecar > VITE_KERNEL_URL (cloud) > VITE_KERNEL_PORT (dev) > default 49200
+ *
+ * Tauri MUST be checked first — its production build also sets VITE_KERNEL_URL
+ * (for cloud deployment), but in Tauri we always use the sidecar port.
  */
 async function getKernelUrl(): Promise<string> {
-  // ① Cloud mode: VITE_KERNEL_URL is set (e.g. /ws for same-origin, or full wss:// URL)
-  const envUrl = import.meta.env.VITE_KERNEL_URL;
-  if (envUrl) {
-    // If it's a relative path (starts with /), construct from current location
-    if (envUrl.startsWith('/')) {
-      const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-      return `${proto}//${location.host}${envUrl}`;
-    }
-    return envUrl;
-  }
-
-  // ② Tauri desktop mode — kernel port from sidecar
+  // ① Tauri desktop mode — kernel port from sidecar
   try {
     if (window.__TAURI_INTERNALS__) {
       isTauri = true;
@@ -51,6 +43,17 @@ async function getKernelUrl(): Promise<string> {
     }
   } catch {
     // not in Tauri, fall through
+  }
+
+  // ② Cloud mode: VITE_KERNEL_URL is set (e.g. /ws for same-origin, or full wss:// URL)
+  const envUrl = import.meta.env.VITE_KERNEL_URL;
+  if (envUrl) {
+    // If it's a relative path (starts with /), construct from current location
+    if (envUrl.startsWith('/')) {
+      const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      return `${proto}//${location.host}${envUrl}`;
+    }
+    return envUrl;
   }
 
   // ③ Local Vite dev mode — VITE_KERNEL_PORT env var
