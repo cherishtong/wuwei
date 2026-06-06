@@ -9,7 +9,7 @@
     "provider": "deepseek",
     "model": "deepseek-v4-pro",
     "apiKeyEnv": "OPENAI_API_KEY",
-    "apiKey": "sk-1a94da348bdb411cad94fa300890359f",
+    "apiKey": "",
     "baseUrl": null,
     "timeoutSeconds": 60,
     "maxRetries": 3
