@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 wuwei/
 ├── wuwei-core/          # Java 21 kernel — GraalVM native-image, Helidon WebSocket
 ├── wuwei-renderer/      # React 19 SPA — Tauri desktop shell, shadcn/ui + Tailwind
-└── wuwei.json           # Kernel config (LLM provider/model/apiKey)
+└── wuwei.json           # Kernel config (LLM provider/model)
 ```
 
 ## Common commands
@@ -359,7 +359,7 @@ The package contains:
 wuwei-cloud-0.0.1-beta/
 ├── wuwei-kernel.jar       # Fat JAR
 ├── dist/                  # Frontend SPA (built with VITE_KERNEL_URL=/ws)
-├── wuwei.json             # Cloud config template (set WUWEI_API_KEY env var)
+├── wuwei.json             # Cloud config template (API key set via UI)
 ├── start.sh               # Linux start script
 └── start.bat              # Windows start script
 ```
@@ -368,7 +368,7 @@ wuwei-cloud-0.0.1-beta/
 
 ```bash
 docker build -t wuwei-cloud .
-docker run -d -p 8080:8080 -e WUWEI_API_KEY=sk-xxx -v ~/.wuwei:/root/.wuwei wuwei-cloud
+docker run -d -p 8080:8080 -v ~/.wuwei:/root/.wuwei wuwei-cloud
 ```
 
 ### Server deployment (systemd)
@@ -380,7 +380,6 @@ scp deploy/wuwei-cloud-0.0.1-beta.tar.gz user@host:/opt/
 # 2. On server
 cd /opt && tar -xzf wuwei-cloud-0.0.1-beta.tar.gz
 cd wuwei-cloud-0.0.1-beta
-export WUWEI_API_KEY=sk-xxx
 ./start.sh
 
 # 3. Or as systemd service

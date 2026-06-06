@@ -2,9 +2,7 @@
   "version": "0.0.1-beta",
   "llm": {
     "provider": "deepseek",
-    "model": "deepseek-v4-pro",
-    "apiKeyEnv": "WUWEI_API_KEY",
-    "apiKey": ""
+    "model": "deepseek-v4-pro"
   },
   "logLevel": "info"
 }

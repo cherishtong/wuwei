@@ -134,7 +134,7 @@ cd wuwei-renderer && npm run build   # uses .env.production → VITE_KERNEL_URL=
 
 # Docker
 docker build -t wuwei-cloud .
-docker run -d -p 8080:8080 -e WUWEI_API_KEY=sk-xxx -v ~/.wuwei:/root/.wuwei wuwei-cloud
+docker run -d -p 8080:8080 -v ~/.wuwei:/root/.wuwei wuwei-cloud
 ```
 
 ### GitHub Actions
@@ -399,8 +399,6 @@ Key files:
   "llm": {
     "provider": "deepseek",
     "model": "deepseek-v4-pro",
-    "apiKeyEnv": "OPENAI_API_KEY",
-    "apiKey": "...",
     "baseUrl": null,
     "timeoutSeconds": 60,
     "maxRetries": 3
@@ -438,7 +436,6 @@ Key files:
 ### Environment Variables
 
 - `JAVA_HOME` — Must point to GraalVM 25.0.2+ for native compilation.
-- `OPENAI_API_KEY` / `WUWEI_API_KEY` — LLM API key for the kernel. Read from `apiKeyEnv` in wuwei.json, or read directly from wuwei.json's `apiKey` field.
 - `VITE_KERNEL_URL` — Cloud mode WebSocket URL (e.g. `/ws` for same-origin, or `wss://host/ws`). Set in `.env.production` for `npm run build`.
 - `VITE_KERNEL_PORT` — Dev mode WebSocket port (default 49200). Set in `.env.development` for `npm run dev`.
 

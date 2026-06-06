@@ -8,8 +8,6 @@
   "llm": {
     "provider": "deepseek",
     "model": "deepseek-v4-pro",
-    "apiKeyEnv": "OPENAI_API_KEY",
-    "apiKey": "",
     "baseUrl": null,
     "timeoutSeconds": 60,
     "maxRetries": 3

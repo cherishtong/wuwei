@@ -43,9 +43,7 @@ Copy-Item -Recurse "$root\wuwei-renderer\dist\*" "$outDir\dist"
   "version": "$version",
   "llm": {
     "provider": "deepseek",
-    "model": "deepseek-v4-pro",
-    "apiKeyEnv": "WUWEI_API_KEY",
-    "apiKey": ""
+    "model": "deepseek-v4-pro"
   },
   "logLevel": "info"
 }
@@ -75,4 +73,4 @@ Remove-Item $zipFile -ErrorAction SilentlyContinue
 Compress-Archive -Path $outDir -DestinationPath $zipFile
 
 Write-Host "Done: $zipFile"
-Write-Host "Deploy: unzip on server, set WUWEI_API_KEY env, run start.sh"
+Write-Host "Deploy: unzip on server, run start.sh (API key set via UI in SQLite)"

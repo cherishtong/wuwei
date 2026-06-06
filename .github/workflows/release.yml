@@ -323,7 +323,7 @@ jobs:
           cp artifacts/wuwei-kernel-jar/wuwei-kernel.jar "$PKG/"
           cp -r artifacts/dist/* "$PKG/dist/"
           cat > "$PKG/wuwei.json" << JSONEOF
-          { "version": "${V}", "llm": { "provider": "deepseek", "model": "deepseek-v4-pro", "apiKeyEnv": "WUWEI_API_KEY", "apiKey": "" }, "logLevel": "info" }
+          { "version": "${V}", "llm": { "provider": "deepseek", "model": "deepseek-v4-pro" }, "logLevel": "info" }
           JSONEOF
           cat > "$PKG/start.sh" << 'SHEOF'
           #!/bin/bash

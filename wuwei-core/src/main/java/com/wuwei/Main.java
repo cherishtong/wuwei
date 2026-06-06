@@ -107,12 +107,10 @@ public class Main {
                 if (cfg.has("llm")) {
                     JsonNode llm = cfg.get("llm");
                     String baseUrl = (llm.has("baseUrl") && !llm.get("baseUrl").isNull()) ? llm.get("baseUrl").asText() : "";
-                    String apiKey = (llm.has("apiKey") && !llm.get("apiKey").isNull()) ? llm.get("apiKey").asText() : "";
                     storeService.seedDefaultRouting(Map.of(
                         "provider", llm.has("provider") ? llm.get("provider").asText() : "deepseek",
                         "model", llm.has("model") ? llm.get("model").asText() : "deepseek-chat",
                         "apiUrl", baseUrl,
-                        "apiKey", apiKey,
                         "params", "{}"
                     ));
                 }

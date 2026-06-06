@@ -35,9 +35,7 @@ cat > "$OUT_DIR/wuwei.json" << EOF
   "version": "$VERSION",
   "llm": {
     "provider": "deepseek",
-    "model": "deepseek-v4-pro",
-    "apiKeyEnv": "WUWEI_API_KEY",
-    "apiKey": ""
+    "model": "deepseek-v4-pro"
   },
   "logLevel": "info"
 }
@@ -59,4 +57,4 @@ echo "[4/4] Creating tar.gz..."
 tar -czf "$ARCHIVE" -C "$ROOT/deploy" "wuwei-cloud-$VERSION"
 
 echo "Done: $ARCHIVE"
-echo "Deploy: tar -xzf wuwei-cloud-$VERSION.tar.gz && cd wuwei-cloud-$VERSION && WUWEI_API_KEY=sk-xxx ./start.sh"
+echo "Deploy: tar -xzf wuwei-cloud-$VERSION.tar.gz && cd wuwei-cloud-$VERSION && ./start.sh"

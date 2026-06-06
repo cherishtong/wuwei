@@ -278,43 +278,40 @@ public class StoreService {
         }
     }
 
-    /** Seed / refresh default model routing from wuwei.json at startup. */
+    /** Seed model routing from wuwei.json. Only fills missing task types; never overwrites api_key set via UI. */
     public void seedDefaultRouting(Map<String, String> llmConfig) {
         try {
             String provider = llmConfig.getOrDefault("provider", "deepseek");
             String model = llmConfig.getOrDefault("model", "deepseek-chat");
             String apiUrl = llmConfig.getOrDefault("apiUrl", "");
-            String apiKey = llmConfig.getOrDefault("apiKey", "");
             String params = llmConfig.getOrDefault("params", "{}");
 
-            // Only update rows that still have no api_key set (schema.sql defaults).
-            // This preserves user-configured overrides while fixing fresh-DB setups.
+            // Only update provider/model/apiUrl for rows that were never configured.
+            // api_key is only set via the frontend model-routing UI, never from config.
             try (PreparedStatement ps = getConn().prepareStatement(
-                    "UPDATE model_routing SET provider=?, model=?, api_url=?, api_key=?, params=?, updated_at=strftime('%s','now') "
+                    "UPDATE model_routing SET provider=?, model=?, api_url=?, params=?, updated_at=strftime('%s','now') "
                     + "WHERE api_key='' OR api_key IS NULL")) {
                 ps.setString(1, provider);
                 ps.setString(2, model);
                 ps.setString(3, apiUrl);
-                ps.setString(4, apiKey);
-                ps.setString(5, params);
+                ps.setString(4, params);
                 int updated = ps.executeUpdate();
                 if (updated > 0) {
                     log.info("Updated {} model_routing rows with config from wuwei.json", updated);
                 }
             }
 
-            // If nothing needed updating (all have api_key), insert any missing task types
+            // Insert any missing task types (without api_key, user sets via UI)
             String[] taskTypes = {"skill/generate", "skill/repair", "ai/ask", "skill/drift"};
             for (String tt : taskTypes) {
                 try (PreparedStatement ps = getConn().prepareStatement(
-                        "INSERT OR IGNORE INTO model_routing(task_type, provider, model, api_url, api_key, params, updated_at) "
-                        + "VALUES(?, ?, ?, ?, ?, ?, strftime('%s','now'))")) {
+                        "INSERT OR IGNORE INTO model_routing(task_type, provider, model, api_url, params, updated_at) "
+                        + "VALUES(?, ?, ?, ?, ?, strftime('%s','now'))")) {
                     ps.setString(1, tt);
                     ps.setString(2, provider);
                     ps.setString(3, model);
                     ps.setString(4, apiUrl);
-                    ps.setString(5, apiKey);
-                    ps.setString(6, params);
+                    ps.setString(5, params);
                     ps.executeUpdate();
                 }
             }
