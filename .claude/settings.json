@@ -128,7 +128,17 @@
       "PowerShell(git tag v0.0.1-beta)",
       "PowerShell(git tag -f v0.0.1-beta)",
       "PowerShell(cd d:\\\\gitcode\\\\wuwei\\\\wuwei-renderer; $env:VITE_KERNEL_URL = \"/ws\"; npm run build 2>&1)",
-      "PowerShell($gradle = \"D:\\\\codesoft\\\\gradle-9.3.1\\\\bin\\\\gradle.bat\"; cd d:\\\\gitcode\\\\wuwei\\\\wuwei-core; & $gradle fatJar --no-daemon 2>&1)"
+      "PowerShell($gradle = \"D:\\\\codesoft\\\\gradle-9.3.1\\\\bin\\\\gradle.bat\"; cd d:\\\\gitcode\\\\wuwei\\\\wuwei-core; & $gradle fatJar --no-daemon 2>&1)",
+      "PowerShell($gradle = \"D:\\\\codesoft\\\\gradle-9.3.1\\\\bin\\\\gradle.bat\"; cd d:\\\\gitcode\\\\wuwei\\\\wuwei-core; & $gradle fatJar --no-daemon 2>&1; Stop-Process -Name java -Force -ErrorAction SilentlyContinue; Start-Sleep 1; java -jar build/libs/wuwei-kernel.jar --profile cloud 2>&1)",
+      "PowerShell(Start-Sleep 10; \\(Get-Content \"C:\\\\Users\\\\Administrator\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\d--gitcode-wuwei\\\\001911eb-58ac-4a3a-ac6e-177328efbe7c\\\\tasks\\\\bdztjddwd.output\"\\) -match \"WUWEI_PORT|Static web root|WebSocket\")",
+      "PowerShell(Start-Sleep 12; \\(Get-Content \"C:\\\\Users\\\\Administrator\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\d--gitcode-wuwei\\\\001911eb-58ac-4a3a-ac6e-177328efbe7c\\\\tasks\\\\btrwtbx1f.output\"\\) -match \"WUWEI_PORT|WebSocket\")",
+      "PowerShell($headers = @{'Upgrade' = 'websocket'; 'Connection' = 'Upgrade'; 'Sec-WebSocket-Version' = '13'; 'Sec-WebSocket-Key' = 'dGhlIHNhbXBsZSBub25jZQ=='}; try { $r = Invoke-WebRequest -Uri http://localhost:8080/ws -Headers $headers -SkipCertificateCheck; $r.StatusCode; $r.Headers['Upgrade'] } catch { $_.Exception.Message })",
+      "PowerShell(cd d:\\\\gitcode\\\\wuwei\\\\wuwei-renderer; $env:VITE_KERNEL_URL = \"/kernel-ws\"; npm run build 2>&1)",
+      "PowerShell(Start-Sleep 12; \\(Get-Content \"C:\\\\Users\\\\Administrator\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\d--gitcode-wuwei\\\\001911eb-58ac-4a3a-ac6e-177328efbe7c\\\\tasks\\\\bkxg441sq.output\"\\) -match \"WUWEI_PORT|WebSocket\")",
+      "PowerShell(Start-Sleep 12; \\(Get-Content \"C:\\\\Users\\\\Administrator\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\d--gitcode-wuwei\\\\001911eb-58ac-4a3a-ac6e-177328efbe7c\\\\tasks\\\\brdftlwkb.output\"\\) -match \"WUWEI_PORT|WebSocket\")",
+      "PowerShell($src = \"$env:USERPROFILE\\\\.gradle\\\\caches\\\\modules-2\\\\files-2.1\\\\io.helidon.webserver\\\\helidon-webserver-websocket\\\\4.1.4\\\\109fe52a7a60ec6adc9393e71e3169ad89dc1b9\\\\helidon-webserver-websocket-4.1.4-sources.jar\"; jar xf \"$src\" io/helidon/webserver/websocket/WsRouting.java -C $env:TEMP 2>&1; Get-Content \"$env:TEMP\\\\io\\\\helidon\\\\webserver\\\\websocket\\\\WsRouting.java\")",
+      "PowerShell($src = \"$env:USERPROFILE\\\\.gradle\\\\caches\\\\modules-2\\\\files-2.1\\\\io.helidon.webserver\\\\helidon-webserver\\\\4.1.4\\\\d01095a5091c6448a833442056cd207e3a83f73f\\\\helidon-webserver-4.1.4.jar\"; jar xf \"$src\" io/helidon/webserver/Routing.class -C $env:TEMP 2>&1; javap -p \"$env:TEMP\\\\io\\\\helidon\\\\webserver\\\\Routing.class\" 2>&1)",
+      "PowerShell($src = \"$env:USERPROFILE\\\\.gradle\\\\caches\\\\modules-2\\\\files-2.1\\\\io.helidon.webserver\\\\helidon-webserver\\\\4.1.4\\\\d01095a5091c6448a833442056cd207e3a83f73f\\\\helidon-webserver-4.1.4.jar\"; javap -c -p \"$env:TEMP\\\\io\\\\helidon\\\\webserver\\\\ConnectionHandler.class\" 2>&1 | Select-Object -First 80)"
     ],
     "additionalDirectories": [
       "C:\\Users\\Administrator\\.wuwei",

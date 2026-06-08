@@ -2,7 +2,7 @@ package com.wuwei.bus;
 
 import com.wuwei.bus.event.KernelEvent;
 import io.helidon.webserver.WebServer;
-import io.helidon.webserver.http.HttpRouting;
+import io.helidon.webserver.staticcontent.StaticContentService;
 import io.helidon.webserver.websocket.WsRouting;
 import io.helidon.websocket.WsListener;
 import io.helidon.websocket.WsSession;
@@ -14,29 +14,22 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Consumer;
 
 public class WsServer {
 
     private static final Logger log = LoggerFactory.getLogger(WsServer.class);
 
-    private int port;
+    private int wsPort;
     private final String host;
     private final Path webRoot;
     private final MessageRouter router;
     private final EventBus eventBus;
     private final Set<WsSession> sessions = ConcurrentHashMap.newKeySet();
-    private volatile WebServer server;
 
-    /**
-     * @param host    bind address (127.0.0.1 for local dev, 0.0.0.0 for cloud)
-     * @param port    0 for random port, or fixed for cloud
-     * @param router  message router
-     * @param eventBus event bus
-     * @param webRoot null to skip static file serving; non-null to serve SPA from this dir
-     */
     public WsServer(String host, int port, MessageRouter router, EventBus eventBus, Path webRoot) {
         this.host = host;
-        this.port = port;
+        this.wsPort = port;
         this.router = router;
         this.eventBus = eventBus;
         this.webRoot = webRoot;
@@ -44,117 +37,123 @@ public class WsServer {
 
     public void start() {
         WsListener listener = new WsListener() {
-            @Override
-            public void onOpen(WsSession session) {
+            @Override public void onOpen(WsSession session) {
                 sessions.add(session);
-
-                KernelEvent.KernelReady ready =
-                    new KernelEvent.KernelReady("0.0.1-beta", port);
-                session.send(eventBus.serialize(ready), true);
+                session.send(eventBus.serialize(
+                    new KernelEvent.KernelReady("0.0.1-beta", wsPort)), true);
                 System.out.println("[WsServer] WS connected (total: " + sessions.size() + ")");
             }
-
-            @Override
-            public void onMessage(WsSession session, String text, boolean last) {
-                System.out.println("[WsServer] WS <- " + text);
-                try {
-                    router.route(session, text);
-                } catch (Exception e) {
-                    System.out.println("[WsServer] Route error: " + e.getMessage());
-                }
+            @Override public void onMessage(WsSession session, String text, boolean last) {
+                try { router.route(session, text); }
+                catch (Exception e) { System.out.println("[WsServer] Route error: " + e.getMessage()); }
             }
-
-            @Override
-            public void onClose(WsSession session, int statusCode, String reason) {
+            @Override public void onClose(WsSession session, int statusCode, String reason) {
                 sessions.remove(session);
                 System.out.println("[WsServer] WS disconnected (total: " + sessions.size() + ")");
             }
-
-            @Override
-            public void onError(WsSession session, Throwable throwable) {
+            @Override public void onError(WsSession session, Throwable throwable) {
                 sessions.remove(session);
                 System.out.println("[WsServer] WS error: " + throwable.getMessage());
             }
         };
 
-        // Serve static skill asset files from ~/.wuwei/skills/*/phenotype/assets/
         Path skillsAssetsDir = Paths.get(System.getProperty("user.home"), ".wuwei", "skills");
 
-        server = WebServer.builder()
+        // ── WebSocket server (dedicated port) ──
+        WebServer.builder()
             .host(host)
-            .port(port)
-            .routing(b -> {
-                // Specific routes MUST come before catch-all
-                b.any("/ws", (req, res) -> { /* handled by WS upgrade */ });
-                b.get("/skills/{skillId}/assets/{+path}", (req, res) -> {
-                    String skillId = req.path().pathParameters().get("skillId");
-                    String path = req.path().pathParameters().get("path");
-                    Path file = skillsAssetsDir.resolve(skillId).resolve("phenotype").resolve("assets").resolve(path);
-                    if (Files.exists(file) && !Files.isDirectory(file)) {
-                        res.send(file);
-                    } else {
-                        res.status(404).send("Not found");
-                    }
-                });
-                // Static SPA serving (cloud mode)
-                if (webRoot != null) {
-                    // Root path — serve index.html
-                    b.get("/", (req, res) -> {
-                        Path indexFile = webRoot.resolve("index.html");
-                        if (Files.exists(indexFile)) res.send(indexFile);
-                        else res.status(404).send("Not found");
-                    });
-                    // Catch-all for SPA assets and routing
-                    b.get("/{+path}", (req, res) -> {
-                        String path = req.path().pathParameters().get("path");
-                        // If path is empty or has no extension, serve index.html (SPA routing)
-                        Path file = (path == null || path.isEmpty() || !path.contains("."))
-                            ? webRoot.resolve("index.html")
-                            : webRoot.resolve(path);
-                        // SPA fallback: if asset not found, serve index.html
-                        if (!Files.exists(file) || Files.isDirectory(file)) {
-                            file = webRoot.resolve("index.html");
-                        }
-                        if (Files.exists(file)) {
-                            res.send(file);
-                        } else {
-                            res.status(404).send("Not found");
-                        }
-                    });
-                    System.out.println("[WsServer] Static web root: " + webRoot.toAbsolutePath());
-                }
-            })
-            .addRouting(WsRouting.builder()
-                .endpoint("/ws", listener))
+            .port(wsPort)
+            .routing(r -> r.any("/ws", (req, res) -> { /* WsRouting handles upgrade */ }))
+            .addRouting(WsRouting.builder().endpoint("/ws", listener))
             .build()
             .start();
+        System.out.println("[WsServer] WebSocket on port " + wsPort);
 
-        this.port = server.port();
-        System.out.println("[WsServer] WebSocket server listening on port " + this.port);
+        // ── HTTP server (SPA, separate port) ──
+        if (webRoot != null) {
+            int httpPort = (wsPort == 8080) ? 8081 : 8080;
+            Path indexHtml = webRoot.resolve("index.html");
+            Path assetsDir = webRoot.resolve("assets");
+            Consumer<io.helidon.webserver.http.ServerResponse> sendIndex = res -> {
+                try {
+                    res.header("Content-Type", "text/html; charset=utf-8");
+                    res.send(Files.readAllBytes(indexHtml));
+                } catch (Exception e) { res.status(500).send("index.html read error"); }
+            };
+
+            var http = WebServer.builder().host(host).port(httpPort);
+            http.routing(r -> {
+                r.get("/skills/{skillId}/assets/{+path}", (req, res) -> {
+                    String skillId = req.path().pathParameters().get("skillId");
+                    String path = req.path().pathParameters().get("path");
+                    Path file = skillsAssetsDir.resolve(skillId)
+                            .resolve("phenotype").resolve("assets").resolve(path);
+                    if (Files.exists(file) && !Files.isDirectory(file)) serveFile(res, file);
+                    else res.status(404).send("Not found");
+                });
+                r.get("/", (req, res) -> sendIndex.accept(res));
+                if (Files.isDirectory(assetsDir)) {
+                    r.register("/assets", StaticContentService.create(assetsDir));
+                }
+                r.get("/favicon.ico", (req, res) -> {
+                    Path f = webRoot.resolve("favicon.ico");
+                    if (Files.exists(f)) serveFile(res, f); else res.status(404).send();
+                });
+                r.get("/{+path}", (req, res) -> {
+                    String path = req.path().pathParameters().get("path");
+                    if (path != null && path.contains(".")) {
+                        Path file = webRoot.resolve(path);
+                        if (Files.exists(file) && !Files.isDirectory(file)) {
+                            serveFile(res, file);
+                            return;
+                        }
+                    }
+                    sendIndex.accept(res);
+                });
+            });
+            http.build().start();
+            System.out.println("[WsServer] HTTP SPA on port " + httpPort
+                + " (web root: " + webRoot.toAbsolutePath() + ")");
+        }
     }
 
     public void broadcast(String json) {
         for (WsSession session : sessions) {
-            try {
-                session.send(json, true);
-            } catch (Exception e) {
-                log.warn("Broadcast failed: {}", e.getMessage());
-            }
+            try { session.send(json, true); } catch (Exception e) {}
         }
     }
 
     public void sendTo(WsSession session, String json) {
-        try {
-            session.send(json, true);
-        } catch (Exception e) {
-            log.warn("Send failed: {}", e.getMessage());
-        }
+        try { session.send(json, true); } catch (Exception e) {}
     }
 
-    public int getPort() {
-        return port;
+    public int getPort() { return wsPort; }
+    public int getSessionCount() { return sessions.size(); }
+
+    private static void serveFile(io.helidon.webserver.http.ServerResponse res, Path file) {
+        if (!Files.exists(file)) { res.status(404).send("Not found"); return; }
+        try {
+            byte[] bytes = Files.readAllBytes(file);
+            res.header("Content-Type", contentType(file));
+            res.send(bytes);
+        } catch (java.io.IOException e) { res.status(500).send("Internal error"); }
     }
-    public int getSessionCount() {
-        return sessions.size();
+
+    private static String contentType(Path file) {
+        String name = file.getFileName().toString().toLowerCase();
+        if (name.endsWith(".html") || name.endsWith(".htm")) return "text/html; charset=utf-8";
+        if (name.endsWith(".js") || name.endsWith(".mjs")) return "application/javascript; charset=utf-8";
+        if (name.endsWith(".css")) return "text/css; charset=utf-8";
+        if (name.endsWith(".json")) return "application/json; charset=utf-8";
+        if (name.endsWith(".svg")) return "image/svg+xml";
+        if (name.endsWith(".png")) return "image/png";
+        if (name.endsWith(".jpg") || name.endsWith(".jpeg")) return "image/jpeg";
+        if (name.endsWith(".gif")) return "image/gif";
+        if (name.endsWith(".ico")) return "image/x-icon";
+        if (name.endsWith(".woff")) return "font/woff";
+        if (name.endsWith(".woff2")) return "font/woff2";
+        if (name.endsWith(".ttf")) return "font/ttf";
+        if (name.endsWith(".wasm")) return "application/wasm";
+        return "text/html; charset=utf-8";
     }
 }

@@ -12,14 +12,13 @@ java {
 }
 
 repositories {
-    maven { url 'https://maven.aliyun.com/repository/public' }
-    maven { url 'https://maven.aliyun.com/repository/central' }
     mavenCentral()
+    maven { url 'https://maven.aliyun.com/repository/public' }
 }
 
 ext {
     graalvmVersion = '25.0.2'
-    helidonVersion = '4.1.4'
+    helidonVersion = '4.4.1'
     langchain4jVersion = '1.15.0'
 }
 
@@ -30,6 +29,7 @@ dependencies {
     // Helidon Níma WebServer + WebSocket (virtual-thread based)
     implementation 'io.helidon.webserver:helidon-webserver'
     implementation 'io.helidon.webserver:helidon-webserver-websocket'
+    implementation 'io.helidon.webserver:helidon-webserver-static-content'
     implementation 'io.helidon.logging:helidon-logging-jul'
 
     // GraalVM Polyglot SDK + JS runtime (community edition)
