@@ -58,7 +58,7 @@ jobs:
           retention-days: 7
 
   jar:
-    name: Fat JAR (Cloud)
+    name: Boot JAR (Cloud)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -67,7 +67,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with: { gradle-version: '9.3.1' }
       - working-directory: wuwei-core
-        run: gradle fatJar --no-daemon
+        run: gradle bootJar --no-daemon
       - uses: actions/upload-artifact@v4
         with:
           name: wuwei-kernel-jar
