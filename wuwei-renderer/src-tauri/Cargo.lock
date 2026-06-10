@@ -4456,8 +4456,9 @@ dependencies = [
 
 [[package]]
 name = "wuwei-shell"
-version = "6.4.0"
+version = "0.0.1-beta"
 dependencies = [
+ "libc",
  "serde",
  "serde_json",
  "tauri",
