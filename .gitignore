@@ -30,13 +30,19 @@ build/
 *.bc
 *.ll
 *.build_artifacts.txt
+*.exe
+*.exe.debug
 
 # Node (wuwei-renderer)
 node_modules/
 dist/
 
+# Native image output
+wuwei-core/build/native/
+
 # Rust / Cargo build output
 wuwei-renderer/src-tauri/target
+wuwei-renderer/src-tauri/binaries/
 
 # OS
 Thumbs.db
