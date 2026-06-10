@@ -80,10 +80,7 @@ graalvmNative {
             // Include AOT output in native image classpath
             classpath = sourceSets.main.runtimeClasspath
             buildArgs.add('--no-fallback')
-            buildArgs.add('-H:+ReportExceptionStackTraces')
-            buildArgs.add('-J-Xmx12g')
-            // Spring AOT
-            buildArgs.add('-H:+AddAllCharsets')
+            // Size optimizations (no AddAllCharsets, no debug info overhead)
             buildArgs.add('--enable-url-protocols=http,https')
             // Resources
             buildArgs.add('-H:IncludeResources=acorn.min.js')
