@@ -1,6 +1,7 @@
 package com.wuwei.store;
 
 import org.slf4j.Logger;
+import org.springframework.stereotype.Component;
 import org.slf4j.LoggerFactory;
 
 import java.nio.file.Files;
@@ -15,6 +16,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * Per-Skill independent SQLite storage with physical isolation.
  * Each Skill gets its own SQLite file. Direct JDBC — no pool needed.
  */
+@Component
 public class SkillStateStore {
 
     private static final Logger log = LoggerFactory.getLogger(SkillStateStore.class);

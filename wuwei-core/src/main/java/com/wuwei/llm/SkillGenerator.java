@@ -1,6 +1,7 @@
 package com.wuwei.llm;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import org.springframework.stereotype.Component;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.data.message.UserMessage;
@@ -53,6 +54,7 @@ import java.util.stream.Stream;
  * Conversation memory is auto-managed by {@code @MemoryId} + ChatMemory —
  * no manual memory Map building.
  */
+@Component
 public class SkillGenerator {
 
     private static final Logger log = LoggerFactory.getLogger(SkillGenerator.class);
@@ -81,9 +83,7 @@ public class SkillGenerator {
                           SkillManager skillManager, SkillIndexer skillIndexer,
                           SnapshotService snapshotService,
                           EventBus eventBus, ObjectMapper mapper,
-                          ConversationService conversationService,
-                          BiConsumer<String, Map<String, Object>> onMessageUpdate,
-                          int maxRepairAttempts) {
+                          ConversationService conversationService) {
         this.agentFactory = agentFactory;
         this.memoryService = memoryService;
         this.storeService = storeService;
@@ -96,8 +96,7 @@ public class SkillGenerator {
         this.eventBus = eventBus;
         this.mapper = mapper;
         this.conversationService = conversationService;
-        this.onMessageUpdate = onMessageUpdate;
-        this.maxRepairAttempts = maxRepairAttempts;
+        this.maxRepairAttempts = 10;  // default, overridable via setter
 
         String home = System.getProperty("user.home");
         this.skillsBaseDir = Paths.get(home, ".wuwei", "skills").toString();

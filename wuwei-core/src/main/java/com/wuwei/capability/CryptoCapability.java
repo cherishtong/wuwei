@@ -1,6 +1,7 @@
 package com.wuwei.capability;
 
 import org.graalvm.polyglot.Value;
+import org.springframework.stereotype.Component;
 import org.graalvm.polyglot.proxy.ProxyExecutable;
 import org.graalvm.polyglot.proxy.ProxyObject;
 import org.slf4j.Logger;
@@ -31,6 +32,7 @@ import java.util.Set;
  *   capability.crypto.randomBytes(n)                → base64
  *   capability.crypto.generatePassword(len)         → string
  */
+@Component
 public class CryptoCapability {
 
     private static final Logger log = LoggerFactory.getLogger(CryptoCapability.class);

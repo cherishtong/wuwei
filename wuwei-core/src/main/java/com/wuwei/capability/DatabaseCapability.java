@@ -1,6 +1,7 @@
 package com.wuwei.capability;
 
 import org.graalvm.polyglot.Value;
+import org.springframework.stereotype.Component;
 import org.graalvm.polyglot.proxy.ProxyArray;
 import org.graalvm.polyglot.proxy.ProxyExecutable;
 import org.graalvm.polyglot.proxy.ProxyObject;
@@ -29,6 +30,7 @@ import java.util.regex.Pattern;
  *   capability.db.query(sql, [params]) — SELECT → [{col: val, ...}]
  *   capability.db.execute(sql, [params]) — INSERT/UPDATE/DELETE → {changes: N}
  */
+@Component
 public class DatabaseCapability {
 
     private static final Logger log = LoggerFactory.getLogger(DatabaseCapability.class);

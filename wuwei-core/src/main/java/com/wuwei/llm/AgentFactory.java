@@ -9,6 +9,8 @@ import dev.langchain4j.model.openai.OpenAiStreamingChatModel;
 import dev.langchain4j.service.AiServices;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Service;
 
 import java.time.Duration;
 import java.util.Map;
@@ -16,16 +18,30 @@ import java.util.Map;
 /**
  * Creates LangChain4j AiServices agents with per-request model routing + ChatMemory.
  *
- * Each {@code create*} method merges user override → SQLite routing → defaults,
- * builds an OpenAI-compatible model, and wraps it in an AiServices proxy with
- * persistent ChatMemory via {@link SummarizingChatMemoryStore}.
+ * Defaults come from Spring Boot configuration (application.yml / env vars).
+ * Model routing overrides come from the SQLite model_routing table (set via frontend).
+ *
+ * Priority: user override → model_routing → application.yml defaults
  */
+@Service
 public class AgentFactory {
 
     private static final Logger log = LoggerFactory.getLogger(AgentFactory.class);
 
     private final StoreService storeService;
     private final SummarizingChatMemoryStore memoryStore;
+
+    @Value("${langchain4j.open-ai.chat-model.base-url:https://api.deepseek.com/v1}")
+    private String defaultBaseUrl;
+
+    @Value("${langchain4j.open-ai.chat-model.api-key:}")
+    private String defaultApiKey;
+
+    @Value("${langchain4j.open-ai.chat-model.model-name:deepseek-v4-pro}")
+    private String defaultModel;
+
+    @Value("${langchain4j.open-ai.chat-model.timeout:300s}")
+    private Duration defaultTimeout;
 
     public AgentFactory(StoreService storeService, SummarizingChatMemoryStore memoryStore) {
         this.storeService = storeService;
@@ -38,23 +54,19 @@ public class AgentFactory {
     public static AiAskAgent createAskAgentStatic(Map<String, String> routing) {
         LlmConfig config = LlmConfig.fromMap(routing);
         ChatModel model = OpenAiChatModel.builder()
-            .baseUrl(config.apiUrl() != null && !config.apiUrl().isBlank() ? config.apiUrl() : "https://api.deepseek.com/v1")
-            .apiKey(config.apiKey() != null && !config.apiKey().isBlank() ? config.apiKey()
-                : (System.getenv("OPENAI_API_KEY") != null ? System.getenv("OPENAI_API_KEY") : ""))
+            .baseUrl(apiUrlOrDefault(config))
+            .apiKey(apiKeyOrDefault(config))
             .modelName(config.model())
             .timeout(Duration.ofSeconds(300))
             .maxRetries(1)
-            .logRequests(false)
-            .logResponses(false)
+            .logRequests(false).logResponses(false)
             .build();
         StreamingChatModel streamingModel = OpenAiStreamingChatModel.builder()
-            .baseUrl(config.apiUrl() != null && !config.apiUrl().isBlank() ? config.apiUrl() : "https://api.deepseek.com/v1")
-            .apiKey(config.apiKey() != null && !config.apiKey().isBlank() ? config.apiKey()
-                : (System.getenv("OPENAI_API_KEY") != null ? System.getenv("OPENAI_API_KEY") : ""))
+            .baseUrl(apiUrlOrDefault(config))
+            .apiKey(apiKeyOrDefault(config))
             .modelName(config.model())
             .timeout(Duration.ofSeconds(300))
-            .logRequests(false)
-            .logResponses(false)
+            .logRequests(false).logResponses(false)
             .build();
         return AiServices.builder(AiAskAgent.class)
             .chatModel(model)
@@ -70,22 +82,63 @@ public class AgentFactory {
         return AiServices.builder(SkillGenerateAgent.class)
             .streamingChatModel(model)
             .chatMemoryProvider(memoryId -> MessageWindowChatMemory.builder()
-                .id(memoryId)
-                .maxMessages(20)
-                .chatMemoryStore(memoryStore)
-                .build())
+                .id(memoryId).maxMessages(20).chatMemoryStore(memoryStore).build())
             .build();
     }
 
-    /**
-     * Simple chat — send a prompt, get a text response.
-     * Used by SkillIndexer for LLM-based indexing and retrieval.
-     */
-    public String chat(String prompt) {
-        return rawChat(prompt);
+    public SkillGenerateSyncAgent createGenerateSyncAgent(String skillId, Map<String, String> override) {
+        LlmConfig config = resolveConfig("skill/generate", override);
+        ChatModel model = buildChatModel(config);
+        return AiServices.builder(SkillGenerateSyncAgent.class)
+            .chatModel(model)
+            .chatMemoryProvider(memoryId -> MessageWindowChatMemory.builder()
+                .id(memoryId).maxMessages(20).chatMemoryStore(memoryStore).build())
+            .build();
     }
 
-    /** Pure chat — no code-gen bias. Sends system + user messages for clean JSON output. */
+    public SkillRepairAgent createRepairAgent(String skillId, Map<String, String> override) {
+        LlmConfig config = resolveConfig("skill/repair", override);
+        ChatModel model = buildChatModel(config);
+        return AiServices.builder(SkillRepairAgent.class)
+            .chatModel(model)
+            .chatMemoryProvider(memoryId -> MessageWindowChatMemory.builder()
+                .id(memoryId).maxMessages(20).chatMemoryStore(memoryStore).build())
+            .build();
+    }
+
+    public DriftAnalysisAgent createDriftAgent(String skillId, Map<String, String> override) {
+        LlmConfig config = resolveConfig("skill/drift", override);
+        ChatModel model = buildChatModel(config);
+        return AiServices.builder(DriftAnalysisAgent.class)
+            .chatModel(model)
+            .chatMemoryProvider(memoryId -> MessageWindowChatMemory.builder()
+                .id(memoryId).maxMessages(20).chatMemoryStore(memoryStore).build())
+            .build();
+    }
+
+    public PlannerAgent createPlannerAgent(Map<String, String> override) {
+        LlmConfig config = resolveConfig("skill/generate", override);
+        ChatModel model = buildChatModel(config);
+        return AiServices.builder(PlannerAgent.class).chatModel(model).build();
+    }
+
+    public ChatModel createChatModel(Map<String, String> override) {
+        return buildChatModel(resolveConfig("skill/generate", override));
+    }
+
+    public AiAskAgent createAskAgent(Map<String, String> override) {
+        LlmConfig config = resolveConfig("ai/ask", override);
+        ChatModel model = buildChatModel(config);
+        StreamingChatModel streamingModel = buildStreamingModel(config);
+        return AiServices.builder(AiAskAgent.class)
+            .chatModel(model).streamingChatModel(streamingModel)
+            .chatMemoryProvider(memoryId -> MessageWindowChatMemory.builder()
+                .id(memoryId).maxMessages(20).chatMemoryStore(memoryStore).build())
+            .build();
+    }
+
+    public String chat(String prompt) { return rawChat(prompt); }
+
     public String rawChat(String prompt) {
         try {
             LlmConfig config = resolveConfig("ai/ask", null);
@@ -100,116 +153,40 @@ public class AgentFactory {
         }
     }
 
-    /** Synchronous (non-streaming) generate agent — avoids DeepSeek V4 streaming tool-call leakage bug. */
-    public SkillGenerateSyncAgent createGenerateSyncAgent(String skillId, Map<String, String> override) {
-        LlmConfig config = resolveConfig("skill/generate", override);
-        ChatModel model = buildChatModel(config);
-        return AiServices.builder(SkillGenerateSyncAgent.class)
-            .chatModel(model)
-            .chatMemoryProvider(memoryId -> MessageWindowChatMemory.builder()
-                .id(memoryId)
-                .maxMessages(20)
-                .chatMemoryStore(memoryStore)
-                .build())
-            .build();
-    }
-
-    public SkillRepairAgent createRepairAgent(String skillId, Map<String, String> override) {
-        LlmConfig config = resolveConfig("skill/repair", override);
-        ChatModel model = buildChatModel(config);
-        return AiServices.builder(SkillRepairAgent.class)
-            .chatModel(model)
-            .chatMemoryProvider(memoryId -> MessageWindowChatMemory.builder()
-                .id(memoryId)
-                .maxMessages(20)
-                .chatMemoryStore(memoryStore)
-                .build())
-            .build();
-    }
-
-    public DriftAnalysisAgent createDriftAgent(String skillId, Map<String, String> override) {
-        LlmConfig config = resolveConfig("skill/drift", override);
-        ChatModel model = buildChatModel(config);
-        return AiServices.builder(DriftAnalysisAgent.class)
-            .chatModel(model)
-            .chatMemoryProvider(memoryId -> MessageWindowChatMemory.builder()
-                .id(memoryId)
-                .maxMessages(20)
-                .chatMemoryStore(memoryStore)
-                .build())
-            .build();
-    }
-
-    /** Create a Planner agent — plain text, no tools. Used once per generation. */
-    public PlannerAgent createPlannerAgent(Map<String, String> override) {
-        LlmConfig config = resolveConfig("skill/generate", override);
-        ChatModel model = buildChatModel(config);
-        return AiServices.builder(PlannerAgent.class)
-            .chatModel(model)
-            .build();
-    }
-
-    /** Create a bare ChatModel for single-shot file generation. */
-    public ChatModel createChatModel(Map<String, String> override) {
-        LlmConfig config = resolveConfig("skill/generate", override);
-        return buildChatModel(config);
-    }
-
-    public AiAskAgent createAskAgent(Map<String, String> override) {
-        LlmConfig config = resolveConfig("ai/ask", override);
-        ChatModel model = buildChatModel(config);
-        StreamingChatModel streamingModel = buildStreamingModel(config);
-        return AiServices.builder(AiAskAgent.class)
-            .chatModel(model)
-            .streamingChatModel(streamingModel)
-            .chatMemoryProvider(memoryId -> MessageWindowChatMemory.builder()
-                .id(memoryId)
-                .maxMessages(20)
-                .chatMemoryStore(memoryStore)
-                .build())
-            .build();
-    }
-
     // ── Internal ───────────────────────────────────────────────────────
 
-    private LlmConfig resolveConfig(String taskType, Map<String, String> override) {
+    LlmConfig resolveConfig(String taskType, Map<String, String> override) {
         Map<String, String> routing = storeService.getModelRouting(taskType);
         return LlmConfig.merge(override, routing);
     }
 
-    private ChatModel buildChatModel(LlmConfig config) {
-        System.out.println("[kernel] [AgentFactory] buildChatModel: baseUrl=" + resolveBaseUrl(config) + " model=" + config.model() + " hasApiKey=" + (!resolveApiKey(config).isEmpty()));
+    ChatModel buildChatModel(LlmConfig config) {
+        String url = config.apiUrl() != null && !config.apiUrl().isBlank() ? config.apiUrl() : defaultBaseUrl;
+        String key = config.apiKey() != null && !config.apiKey().isBlank() ? config.apiKey() : defaultApiKey;
+        log.debug("buildChatModel: baseUrl={} model={}", url, config.model());
         return OpenAiChatModel.builder()
-            .baseUrl(resolveBaseUrl(config))
-            .apiKey(resolveApiKey(config))
-            .modelName(config.model())
-            .timeout(Duration.ofSeconds(300))
-            .maxRetries(1)
-            .logRequests(false)
-            .logResponses(true)
+            .baseUrl(url).apiKey(key).modelName(config.model())
+            .timeout(defaultTimeout).maxRetries(1)
+            .logRequests(false).logResponses(true)
             .build();
     }
 
-    private StreamingChatModel buildStreamingModel(LlmConfig config) {
-        System.out.println("[kernel] [AgentFactory] buildStreamingModel: baseUrl=" + resolveBaseUrl(config) + " model=" + config.model() + " hasApiKey=" + (!resolveApiKey(config).isEmpty()));
+    StreamingChatModel buildStreamingModel(LlmConfig config) {
+        String url = config.apiUrl() != null && !config.apiUrl().isBlank() ? config.apiUrl() : defaultBaseUrl;
+        String key = config.apiKey() != null && !config.apiKey().isBlank() ? config.apiKey() : defaultApiKey;
         return OpenAiStreamingChatModel.builder()
-            .baseUrl(resolveBaseUrl(config))
-            .apiKey(resolveApiKey(config))
-            .modelName(config.model())
-            .timeout(Duration.ofSeconds(300))
-            .logRequests(false)
-            .logResponses(true)
+            .baseUrl(url).apiKey(key).modelName(config.model())
+            .timeout(defaultTimeout)
+            .logRequests(false).logResponses(true)
             .build();
     }
 
-    private String resolveBaseUrl(LlmConfig config) {
-        if (config.apiUrl() != null && !config.apiUrl().isBlank()) return config.apiUrl();
-        return "https://api.deepseek.com/v1";
+    private static String apiUrlOrDefault(LlmConfig c) {
+        return c.apiUrl() != null && !c.apiUrl().isBlank() ? c.apiUrl() : "https://api.deepseek.com/v1";
     }
 
-    private String resolveApiKey(LlmConfig config) {
-        if (config.apiKey() != null && !config.apiKey().isBlank()) return config.apiKey();
-        String env = System.getenv("OPENAI_API_KEY");
-        return env != null ? env : "";
+    private static String apiKeyOrDefault(LlmConfig c) {
+        return c.apiKey() != null && !c.apiKey().isBlank() ? c.apiKey()
+            : (System.getenv("OPENAI_API_KEY") != null ? System.getenv("OPENAI_API_KEY") : "");
     }
 }

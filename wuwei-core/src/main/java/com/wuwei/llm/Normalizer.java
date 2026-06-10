@@ -1,6 +1,7 @@
 package com.wuwei.llm;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import org.springframework.stereotype.Component;
 import com.fasterxml.jackson.databind.MapperFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -16,6 +17,7 @@ import java.util.TreeMap;
  * Post-processing normalizer for LLM output.
  * Produces deterministic output: same intent → same files (git-diff friendly).
  */
+@Component
 public class Normalizer {
 
     private static final Logger log = LoggerFactory.getLogger(Normalizer.class);

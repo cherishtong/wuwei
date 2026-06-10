@@ -1,6 +1,7 @@
 package com.wuwei.capability;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import org.springframework.stereotype.Component;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.wuwei.store.StoreService;
 import org.graalvm.polyglot.Value;
@@ -30,6 +31,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * JS API:
  *   capability.websearch.search(query, {limit: 5}) → {results: [{title, url, snippet}], answer: "..."}
  */
+@Component
 public class WebSearchCapability {
 
     private static final Logger log = LoggerFactory.getLogger(WebSearchCapability.class);

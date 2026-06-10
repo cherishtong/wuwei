@@ -1,6 +1,7 @@
 package com.wuwei.capability;
 
 import com.wuwei.gate.GateException;
+import org.springframework.stereotype.Component;
 import com.wuwei.skill.SkillManifest;
 import org.graalvm.polyglot.Value;
 import org.graalvm.polyglot.proxy.ProxyArray;
@@ -23,6 +24,7 @@ import java.util.stream.Collectors;
  * All paths are virtual — the kernel maps them into a per-skill sandbox
  * directory and prevents path traversal.
  */
+@Component
 public class FileCapability {
 
     private static final Logger log = LoggerFactory.getLogger(FileCapability.class);

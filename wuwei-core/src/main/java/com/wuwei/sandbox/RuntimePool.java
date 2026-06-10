@@ -1,6 +1,7 @@
 package com.wuwei.sandbox;
 
 import com.wuwei.capability.CapabilitySet;
+import org.springframework.stereotype.Component;
 import com.wuwei.skill.SkillManifest;
 import org.graalvm.polyglot.Engine;
 
@@ -14,6 +15,7 @@ import java.util.function.Consumer;
  * but each Skill gets an isolated Context.
  * Engines are lazily initialized to avoid build-time Truffle issues in native-image.
  */
+@Component
 public class RuntimePool {
 
     private static volatile Engine sharedEngine;

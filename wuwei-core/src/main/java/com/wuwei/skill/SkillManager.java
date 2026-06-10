@@ -1,6 +1,7 @@
 package com.wuwei.skill;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import org.springframework.stereotype.Component;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.wuwei.a2ui.A2uiEngine;
 import com.wuwei.bus.EventBus;
@@ -37,6 +38,7 @@ import java.util.function.Consumer;
  * Central Skill lifecycle coordinator.
  * Loads skills from disk, manages runtimes, routes events, broadcasts UI patches.
  */
+@Component
 public class SkillManager {
 
     private static final Logger log = LoggerFactory.getLogger(SkillManager.class);

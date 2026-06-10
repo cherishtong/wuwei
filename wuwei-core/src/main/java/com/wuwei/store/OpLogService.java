@@ -1,12 +1,14 @@
 package com.wuwei.store;
 
 import com.wuwei.bus.event.KernelEvent;
+import org.springframework.stereotype.Component;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
  * Operation log service. Records all kernel events for audit trail.
  */
+@Component
 public class OpLogService {
 
     private static final Logger log = LoggerFactory.getLogger(OpLogService.class);

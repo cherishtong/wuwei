@@ -1,0 +1,54 @@
+# ── Wuwei Kernel — Spring Boot Configuration ───────────────────
+
+server:
+  port: 0  # random port (local mode)
+
+spring:
+  threads.virtual.enabled: true  # Java 21 Virtual Threads
+  application.name: wuwei-kernel
+
+  # ── DataSource (H2 for dev/test, PostgreSQL for production) ──
+  datasource:
+    url: jdbc:h2:file:${user.home}/.wuwei/data/registry;DB_CLOSE_DELAY=-1;MODE=PostgreSQL
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+
+  # ── JPA ──────────────────────────────────────────────────────
+  jpa:
+    open-in-view: false
+    hibernate.ddl-auto: update  # auto-creates tables from @Entity
+    show-sql: false
+    properties.hibernate.format_sql: true
+
+  # ── Disable schema.sql auto-execution (JPA handles DDL) ─────
+  sql.init.mode: never
+
+  # ── Static resources for SPA ──────────────────────────────────
+  web.resources.static-locations: classpath:/static/
+
+# ── LangChain4j defaults ───────────────────────────────────────
+langchain4j:
+  open-ai:
+    chat-model:
+      base-url: https://api.deepseek.com/v1
+      api-key: ${DEEPSEEK_API_KEY:}
+      model-name: deepseek-v4-pro
+      timeout: 300s
+      max-retries: 1
+
+# ── Logging ────────────────────────────────────────────────────
+logging:
+  file.path: ${user.home}/.wuwei/logs
+  level:
+    com.wuwei: INFO
+    org.springframework: WARN
+
+# ── Actuator ───────────────────────────────────────────────────
+management:
+  endpoints.web.exposure.include: health,metrics
+
+# ── Wuwei custom ───────────────────────────────────────────────
+wuwei:
+  config.path:  # override wuwei.json path (auto-detect if empty)
+  skills-dir: ${user.home}/.wuwei/skills

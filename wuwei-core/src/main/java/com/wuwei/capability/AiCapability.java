@@ -1,6 +1,7 @@
 package com.wuwei.capability;
 
 import com.wuwei.llm.AgentFactory;
+import org.springframework.stereotype.Component;
 import com.wuwei.llm.AiAskAgent;
 import com.wuwei.llm.AiResult;
 import com.wuwei.store.StoreService;
@@ -20,6 +21,7 @@ import java.util.function.Consumer;
  * Exposes {@code capability.ai.ask(prompt)} → {status, body}
  * and {@code capability.ai.askStream(prompt, onChunk, onDone)} for streaming.
  */
+@Component
 public class AiCapability {
 
     private static final Logger log = LoggerFactory.getLogger(AiCapability.class);

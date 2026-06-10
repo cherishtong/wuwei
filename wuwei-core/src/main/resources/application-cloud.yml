@@ -1,0 +1,12 @@
+# ── Wuwei Kernel — Cloud Profile ────────────────────────────────
+
+server:
+  address: 0.0.0.0
+  port: 8080
+
+spring:
+  # Override static locations to serve SPA from external dist directory
+  web.resources.static-locations: file:${wuwei.web-root:../wuwei-renderer/dist}/
+
+wuwei:
+  web-root: ${WUWEI_WEB_ROOT:}

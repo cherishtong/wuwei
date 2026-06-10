@@ -1,6 +1,7 @@
 package com.wuwei.gate;
 
 import com.wuwei.bus.EventBus;
+import org.springframework.stereotype.Component;
 import com.wuwei.bus.event.KernelEvent;
 import com.wuwei.skill.SkillGenome;
 import org.slf4j.Logger;
@@ -17,6 +18,7 @@ import java.util.regex.Pattern;
  * Cross-skill ecosystem guardian.
  * Detects event name collisions and other cross-skill conflicts.
  */
+@Component
 public class EcosystemGuardian {
 
     private static final Logger log = LoggerFactory.getLogger(EcosystemGuardian.class);

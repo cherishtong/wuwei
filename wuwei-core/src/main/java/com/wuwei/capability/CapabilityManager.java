@@ -1,6 +1,7 @@
 package com.wuwei.capability;
 
 import com.wuwei.bus.EventBus;
+import org.springframework.stereotype.Component;
 import com.wuwei.bus.event.KernelEvent;
 import com.wuwei.skill.SkillManifest;
 import com.wuwei.store.SkillStateStore;
@@ -20,6 +21,7 @@ import java.util.concurrent.TimeoutException;
  * based on its declared capabilities in skill.json.
  * Also manages dynamic permission requests and capability revocation.
  */
+@Component
 public class CapabilityManager {
 
     private static final Logger log = LoggerFactory.getLogger(CapabilityManager.class);

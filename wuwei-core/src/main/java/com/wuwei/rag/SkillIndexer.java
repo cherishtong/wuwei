@@ -1,6 +1,7 @@
 package com.wuwei.rag;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.stereotype.Component;
 import com.wuwei.llm.AgentFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -19,6 +20,7 @@ import java.util.stream.Collectors;
  * structured metadata (capabilities, patterns, function summaries, component summaries).
  * Stores the master index as ~/.wuwei/skill-index.json.
  */
+@Component
 public class SkillIndexer {
 
     private static final Logger log = LoggerFactory.getLogger(SkillIndexer.class);

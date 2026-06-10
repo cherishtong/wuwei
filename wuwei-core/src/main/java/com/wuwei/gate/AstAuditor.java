@@ -1,6 +1,7 @@
 package com.wuwei.gate;
 
 import com.wuwei.sandbox.RuntimePool;
+import org.springframework.stereotype.Component;
 import com.wuwei.skill.SkillManifest;
 import com.wuwei.skill.SkillGenome;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -25,6 +26,7 @@ import java.util.Set;
  * Phase 2: ID contract (handlers.js references ⊆ ui.json component IDs)
  * Phase 3: AST security scan (forbidden globals, state leak, capability escape, dynamic UI ID)
  */
+@Component
 public class AstAuditor {
 
     private static final Logger log = LoggerFactory.getLogger(AstAuditor.class);

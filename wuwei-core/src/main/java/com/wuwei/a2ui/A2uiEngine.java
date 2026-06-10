@@ -1,6 +1,7 @@
 package com.wuwei.a2ui;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import org.springframework.stereotype.Component;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -26,6 +27,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * Patches are A2UI-native component fragments:
  *   {id: "count-display", text: {literalString: "5"}}
  */
+@Component
 public class A2uiEngine {
 
     private static final Logger log = LoggerFactory.getLogger(A2uiEngine.class);

@@ -1,6 +1,7 @@
 package com.wuwei.llm;
 
 import com.wuwei.store.StoreService;
+import org.springframework.stereotype.Component;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.SystemMessage;
@@ -20,6 +21,7 @@ import java.util.Map;
  * those messages are summarized and stored so the LLM always retains context about
  * the skill's full evolution history — not just the most recent N turns.
  */
+@Component
 public class SummarizingChatMemoryStore implements ChatMemoryStore {
 
     private static final Logger log = LoggerFactory.getLogger(SummarizingChatMemoryStore.class);

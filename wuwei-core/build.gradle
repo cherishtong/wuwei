@@ -1,6 +1,8 @@
 plugins {
     id 'java'
-    id 'org.graalvm.buildtools.native' version '1.1.0'
+    id 'org.springframework.boot' version '3.4.5'
+    id 'io.spring.dependency-management' version '1.1.7'
+    id 'org.graalvm.buildtools.native' version '0.10.5'
 }
 
 group = 'com.wuwei'
@@ -18,74 +20,56 @@ repositories {
 
 ext {
     graalvmVersion = '25.0.2'
-    helidonVersion = '4.4.1'
     langchain4jVersion = '1.15.0'
 }
 
 dependencies {
-    // Helidon SE BOM
-    implementation enforcedPlatform("io.helidon:helidon-bom:${helidonVersion}")
+    // Spring Boot starters
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+    implementation 'org.springframework.boot:spring-boot-starter-websocket'
+    implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
 
-    // Helidon Níma WebServer + WebSocket (virtual-thread based)
-    implementation 'io.helidon.webserver:helidon-webserver'
-    implementation 'io.helidon.webserver:helidon-webserver-websocket'
-    implementation 'io.helidon.webserver:helidon-webserver-static-content'
-    implementation 'io.helidon.logging:helidon-logging-jul'
+    // LangChain4j — direct LLM calls (manual builder with @Value defaults)
+    implementation "dev.langchain4j:langchain4j:${langchain4jVersion}"
+    implementation "dev.langchain4j:langchain4j-open-ai:${langchain4jVersion}"
 
     // GraalVM Polyglot SDK + JS runtime (community edition)
     implementation "org.graalvm.polyglot:polyglot:${graalvmVersion}"
     implementation "org.graalvm.polyglot:js-community:${graalvmVersion}"
 
-    // SQLite
+    // SQLite — only for DatabaseCapability (per-skill isolated DBs)
     implementation 'org.xerial:sqlite-jdbc:3.45.1.0'
 
-    // Jackson (only databind, no extra modules)
-    implementation 'com.fasterxml.jackson.core:jackson-databind:2.17.0'
+    // H2 — for Spring Data JPA (registry.db replacement in dev/test)
+    runtimeOnly 'com.h2database:h2'
 
-    // LangChain4j — direct LLM calls, replaces PI subprocess
-    implementation "dev.langchain4j:langchain4j:${langchain4jVersion}"
-    implementation "dev.langchain4j:langchain4j-open-ai:${langchain4jVersion}"
-
-    // SLF4J simple logger
-    implementation 'org.slf4j:slf4j-jdk14:2.0.13'
+    // Jackson (Spring Boot auto-configures ObjectMapper, but we keep explicit dep)
+    implementation 'com.fasterxml.jackson.core:jackson-databind'
 
     // Testing
-    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    testImplementation 'org.junit.jupiter:junit-jupiter'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
 
 configurations.all {
-    exclude group: 'io.helidon.logging', module: 'helidon-logging-slf4j'
+    // Exclude Helidon SLF4J bridge if any transitive dependency brings it
+    exclude group: 'io.helidon'
 }
 
 tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8'
 }
 
-jar {
+bootJar {
     archiveBaseName = 'wuwei-kernel'
     archiveVersion = ''
-    manifest {
-        attributes 'Implementation-Title': 'Wuwei Kernel',
-                   'Implementation-Version': archiveVersion,
-                   'Main-Class': 'com.wuwei.Main'
-    }
+    mainClass = 'com.wuwei.Main'
 }
 
-// Fat jar with all dependencies
-task fatJar(type: Jar) {
-    archiveBaseName = 'wuwei-kernel'
-    archiveVersion = ''
-    manifest {
-        attributes 'Main-Class': 'com.wuwei.Main',
-                   'Multi-Release': 'true'
-    }
-    from {
-        configurations.runtimeClasspath.findAll { it.name.endsWith('.jar') }
-            .collect { zipTree(it) }
-    }
-    with jar
-    duplicatesStrategy = DuplicatesStrategy.INCLUDE
+jar {
+    enabled = false  // use bootJar instead
 }
 
 graalvmNative {
@@ -95,32 +79,26 @@ graalvmNative {
             mainClass = 'com.wuwei.Main'
             buildArgs.add('--no-fallback')
             buildArgs.add('-H:+ReportExceptionStackTraces')
-            buildArgs.add('--enable-http')
-            buildArgs.add('--enable-https')
-            buildArgs.add("-J-Xmx${findProperty('nativeImageXmx') ?: '8g'}")
-            // Include resources
+            buildArgs.add('-J-Xmx8g')
+            // Spring AOT
+            buildArgs.add('-H:+AddAllCharsets')
+            buildArgs.add('--enable-url-protocols=http,https')
+            // Resources
             buildArgs.add('-H:IncludeResources=acorn.min.js')
-            buildArgs.add('-H:IncludeResources=schema.sql')
             buildArgs.add('-H:IncludeResources=prompts/generate.txt')
             buildArgs.add('-H:IncludeResources=prompts/repair.txt')
             buildArgs.add('-H:IncludeResources=prompts/refine.txt')
             buildArgs.add('-H:IncludeResources=docs/.*')
-            // LangChain4j
+            // LangChain4j + OkHttp
             buildArgs.add('--initialize-at-build-time=dev.langchain4j')
             buildArgs.add('--initialize-at-run-time=dev.langchain4j.internal')
             buildArgs.add('--initialize-at-run-time=okhttp3,okio')
             // Jackson
             buildArgs.add('--initialize-at-build-time=com.fasterxml.jackson')
-            // Helidon
-            buildArgs.add('--initialize-at-build-time=io.helidon')
-            // SQLite JDBC
-            buildArgs.add('--initialize-at-build-time=org.sqlite')
-            buildArgs.add('--initialize-at-build-time=org.xerial')
-            // Java SQL
-            buildArgs.add('--initialize-at-build-time=java.sql')
-            buildArgs.add('--initialize-at-build-time=javax.sql')
-            // SLF4J
-            buildArgs.add('--initialize-at-build-time=org.slf4j')
+            // SQLite
+            buildArgs.add('--initialize-at-build-time=org.sqlite,org.xerial')
+            // GraalVM JS
+            buildArgs.add('--initialize-at-build-time=org.graalvm')
         }
     }
 }

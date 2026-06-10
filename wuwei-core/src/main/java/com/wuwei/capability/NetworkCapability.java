@@ -1,6 +1,7 @@
 package com.wuwei.capability;
 
 import com.wuwei.gate.GateException;
+import org.springframework.stereotype.Component;
 import com.wuwei.skill.SkillManifest;
 import org.graalvm.polyglot.Value;
 import org.graalvm.polyglot.proxy.ProxyExecutable;
@@ -24,6 +25,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * Controlled network access for Skills.
  * Uses JDK built-in HttpClient instead of Spring WebClient.
  */
+@Component
 public class NetworkCapability {
 
     private static final Logger log = LoggerFactory.getLogger(NetworkCapability.class);

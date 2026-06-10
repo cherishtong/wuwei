@@ -10,7 +10,9 @@ import com.wuwei.llm.SkillGenerator;
 import com.wuwei.skill.SkillManager;
 import com.wuwei.store.ConversationService;
 import com.wuwei.store.StoreService;
-import io.helidon.websocket.WsSession;
+import org.springframework.stereotype.Component;
+import org.springframework.web.socket.TextMessage;
+import org.springframework.web.socket.WebSocketSession;
 import java.lang.management.GarbageCollectorMXBean;
 import java.lang.management.ManagementFactory;
 import java.lang.management.MemoryMXBean;
@@ -32,6 +34,7 @@ import java.util.Map;
 import java.util.function.BiConsumer;
 import java.util.stream.Stream;
 
+@Component
 public class MessageRouter {
 
     private static final Logger log = LoggerFactory.getLogger(MessageRouter.class);
@@ -64,7 +67,7 @@ public class MessageRouter {
         return eventBus;
     }
 
-    public void route(WsSession session, String payload) {
+    public void route(WebSocketSession session, String payload) {
         System.out.println("[Router] route type starting, payload=" + payload.substring(0, Math.min(200, payload.length())));
         try {
             JsonNode msg = mapper.readTree(payload);
@@ -116,7 +119,7 @@ public class MessageRouter {
         }
     }
 
-    private void handleUserIntent(WsSession session, JsonNode msg) {
+    private void handleUserIntent(WebSocketSession session, JsonNode msg) {
         String text = msg.has("payload") ? msg.get("payload").get("text").asText() : "";
         String threadId = extractNullableText(msg, "threadId");
         if (text.isBlank()) {
@@ -198,7 +201,7 @@ public class MessageRouter {
         }, "llm-generate").start();
     }
 
-    private void handleRefineSkill(WsSession session, JsonNode msg) {
+    private void handleRefineSkill(WebSocketSession session, JsonNode msg) {
         String skillId = extractText(msg, "skillId");
         String feedback = msg.has("payload") ? msg.get("payload").get("feedback").asText() : "";
         String threadId = extractNullableText(msg, "threadId");
@@ -267,7 +270,7 @@ public class MessageRouter {
         }
     }
 
-    private void handleEvent(WsSession session, JsonNode msg) {
+    private void handleEvent(WebSocketSession session, JsonNode msg) {
         String skillId = extractText(msg, "skillId");
         String eventId = extractText(msg, "eventId");
         Map<String, Object> inputs = extractMap(msg, "inputs");
@@ -275,7 +278,7 @@ public class MessageRouter {
         skillManager.handleEvent(skillId, eventId, inputs);
     }
 
-    private void handleInstallSkill(WsSession session, JsonNode msg) {
+    private void handleInstallSkill(WebSocketSession session, JsonNode msg) {
         String sourcePath = extractText(msg, "path");
         if (sourcePath.equals("unknown")) {
             eventBus.publishTo(session, new KernelEvent.KernelError("system", "MISSING_PATH",
@@ -351,33 +354,33 @@ public class MessageRouter {
         }
     }
 
-    private void handleUninstallSkill(WsSession session, JsonNode msg) {
+    private void handleUninstallSkill(WebSocketSession session, JsonNode msg) {
         String skillId = extractText(msg, "skillId");
         log.info("uninstall-skill: {}", skillId);
         capManager.cancelPendingGates(skillId);
         skillManager.uninstall(skillId);
     }
 
-    private void handleActivateSkill(WsSession session, JsonNode msg) {
+    private void handleActivateSkill(WebSocketSession session, JsonNode msg) {
         String skillId = extractText(msg, "skillId");
         String threadId = extractNullableText(msg, "threadId");
         log.info("activate-skill: {} threadId={}", skillId, threadId);
         skillManager.activate(skillId, threadId);
     }
 
-    private void handleDeactivateSkill(WsSession session, JsonNode msg) {
+    private void handleDeactivateSkill(WebSocketSession session, JsonNode msg) {
         String skillId = extractText(msg, "skillId");
         String threadId = extractNullableText(msg, "threadId");
         log.info("deactivate-skill: {} threadId={}", skillId, threadId);
         skillManager.deactivate(skillId, threadId);
     }
 
-    private void handleListSkills(WsSession session) {
+    private void handleListSkills(WebSocketSession session) {
         List<KernelEvent.SkillMeta> skills = skillManager.listSkills();
         eventBus.publish(new KernelEvent.SkillList(skills));
     }
 
-    private void handleConfirmGate(WsSession session, JsonNode msg) {
+    private void handleConfirmGate(WebSocketSession session, JsonNode msg) {
         String skillId = extractText(msg, "skillId");
         String capName = extractText(msg, "capName");
         boolean approved = msg.has("approved") && msg.get("approved").asBoolean();
@@ -385,7 +388,7 @@ public class MessageRouter {
         capManager.resolveGate(skillId, capName, approved);
     }
 
-    private void handleSetRateLimit(WsSession session, JsonNode msg) {
+    private void handleSetRateLimit(WebSocketSession session, JsonNode msg) {
         boolean enabled = msg.has("enabled") && msg.get("enabled").asBoolean();
         log.info("set-rate-limit: {}", enabled);
         eventBus.setRateLimitEnabled(enabled);
@@ -393,20 +396,20 @@ public class MessageRouter {
             "事件限流", enabled ? "事件限流已开启" : "事件限流已关闭"));
     }
 
-    private void handleGetRateLimit(WsSession session) {
+    private void handleGetRateLimit(WebSocketSession session) {
         boolean enabled = eventBus.isRateLimitEnabled();
         eventBus.publishTo(session, new KernelEvent.SystemNotify(
             "事件限流状态", enabled ? "当前限流状态：开启" : "当前限流状态：关闭"));
     }
 
-    private void handleRevokeCap(WsSession session, JsonNode msg) {
+    private void handleRevokeCap(WebSocketSession session, JsonNode msg) {
         String skillId = extractText(msg, "skillId");
         String capName = extractText(msg, "capName");
         log.info("revoke-cap: skill={} cap={}", skillId, capName);
         capManager.revoke(skillId, capName);
     }
 
-    private void handleCapabilityProxy(WsSession session, JsonNode msg) {
+    private void handleCapabilityProxy(WebSocketSession session, JsonNode msg) {
         String skillId = extractText(msg, "skillId");
         String capName = extractText(msg, "capName");
         String method = extractText(msg, "method");
@@ -423,7 +426,7 @@ public class MessageRouter {
 
     // ── Workbench: view skill source ────────────────────────────
 
-    private void handleGetSkillSource(WsSession session, JsonNode msg) {
+    private void handleGetSkillSource(WebSocketSession session, JsonNode msg) {
         String skillId = extractText(msg, "skillId");
         String home = System.getProperty("user.home");
         Path skillDir = Paths.get(home, ".wuwei", "skills", skillId);
@@ -470,7 +473,7 @@ public class MessageRouter {
             eventBus.publishTo(session, new KernelEvent.SystemNotify(
                 "源代码: " + skillId,
                 "共 " + files.size() + " 个文件"));
-            session.send(json, true);
+            session.sendMessage(new TextMessage(json));
         } catch (Exception e) {
             log.error("Failed to read skill source {}: {}", skillId, e.getMessage());
             eventBus.publishTo(session, new KernelEvent.KernelError(skillId, "SOURCE_READ_ERROR",
@@ -480,7 +483,7 @@ public class MessageRouter {
 
     // ── Metrics ──────────────────────────────────────────────────
 
-    private void handleGetMetrics(WsSession session) {
+    private void handleGetMetrics(WebSocketSession session) {
         try {
             Runtime rt = Runtime.getRuntime();
             MemoryMXBean mem = ManagementFactory.getMemoryMXBean();
@@ -554,7 +557,7 @@ public class MessageRouter {
             metrics.put("loadedSkills", skillManager.getLoadedCount());
             metrics.put("capabilityStats", skillManager.getCapabilityStats());
             metrics.put("skillCapabilities", skillManager.getSkillCapabilities());
-            metrics.put("wsSessions", eventBus.getWsServer() != null ? eventBus.getWsServer().getSessionCount() : 0);
+            metrics.put("wsSessions", eventBus.getSessionCount());
             try {
                 long total = 0; int fileCount = 0;
                 if (Files.isDirectory(skillsDir)) {
@@ -583,7 +586,7 @@ public class MessageRouter {
             });
             metrics.put("relatedProcesses", procs);
 
-            session.send(mapper.writeValueAsString(metrics), true);
+            session.sendMessage(new TextMessage(mapper.writeValueAsString(metrics)));
         } catch (Exception e) {
             sendError(session, "system", "METRICS_ERROR", e.getMessage());
         }
@@ -591,32 +594,32 @@ public class MessageRouter {
 
     // ── Log viewer ────────────────────────────────────────────────
 
-    private void handleListLogs(WsSession session, JsonNode msg) {
+    private void handleListLogs(WebSocketSession session, JsonNode msg) {
         String source = msg.has("source") ? msg.get("source").asText() : "kernel";
         try {
             String json = mapper.writeValueAsString(Map.of(
                 "type", "log-dates", "source", source,
                 "dates", LogConfig.listDates(source)));
-            session.send(json, true);
+            session.sendMessage(new TextMessage(json));
         } catch (Exception e) {
             sendError(session, "system", "LOG_ERROR", e.getMessage());
         }
     }
 
-    private void handleGetLog(WsSession session, JsonNode msg) {
+    private void handleGetLog(WebSocketSession session, JsonNode msg) {
         String source = msg.has("source") ? msg.get("source").asText() : "kernel";
         String date = msg.has("date") ? msg.get("date").asText() : LogConfig.today();
         try {
             String content = LogConfig.readLog(source, date);
             String json = mapper.writeValueAsString(Map.of(
                 "type", "log-content", "source", source, "date", date, "content", content));
-            session.send(json, true);
+            session.sendMessage(new TextMessage(json));
         } catch (Exception e) {
             sendError(session, "system", "LOG_ERROR", e.getMessage());
         }
     }
 
-    private void handleRenderLog(WsSession session, JsonNode msg) {
+    private void handleRenderLog(WebSocketSession session, JsonNode msg) {
         String level = msg.has("level") ? msg.get("level").asText() : "info";
         String logMsg = msg.has("message") ? msg.get("message").asText() : "";
         LogConfig.logRender(level, logMsg);
@@ -624,7 +627,7 @@ public class MessageRouter {
 
     // ── Model routing ─────────────────────────────────────────────
 
-    private void handleSetModelRouting(WsSession session, JsonNode msg) {
+    private void handleSetModelRouting(WebSocketSession session, JsonNode msg) {
         String taskType = msg.has("taskType") ? msg.get("taskType").asText() : "";
         String provider = msg.has("provider") ? msg.get("provider").asText() : "";
         String model = msg.has("model") ? msg.get("model").asText() : "";
@@ -650,7 +653,7 @@ public class MessageRouter {
                 "apiKey", apiKey,
                 "params", params
             ));
-            session.send(json, true);
+            session.sendMessage(new TextMessage(json));
         } catch (Exception e) {
             log.warn("Failed to send model-routing-updated: {}", e.getMessage());
         }
@@ -658,20 +661,20 @@ public class MessageRouter {
             "模型路由已更新", taskType + " → " + provider + "/" + model));
     }
 
-    private void handleListModelRouting(WsSession session) {
+    private void handleListModelRouting(WebSocketSession session) {
         Map<String, Map<String, String>> entries = storeService.listModelRouting();
         try {
             String json = mapper.writeValueAsString(Map.of(
                 "type", "model-routing-list",
                 "entries", entries
             ));
-            session.send(json, true);
+            session.sendMessage(new TextMessage(json));
         } catch (Exception e) {
             log.warn("Failed to send model-routing-list: {}", e.getMessage());
         }
     }
 
-    private void handleDeleteModelRouting(WsSession session, JsonNode msg) {
+    private void handleDeleteModelRouting(WebSocketSession session, JsonNode msg) {
         String taskType = msg.has("taskType") ? msg.get("taskType").asText() : "";
         if (taskType.isBlank()) {
             eventBus.publishTo(session, new KernelEvent.KernelError("system", "INVALID_ROUTING",
@@ -685,7 +688,7 @@ public class MessageRouter {
                 "type", "model-routing-deleted",
                 "taskType", taskType
             ));
-            session.send(json, true);
+            session.sendMessage(new TextMessage(json));
         } catch (Exception e) {
             log.warn("Failed to send model-routing-deleted: {}", e.getMessage());
         }
@@ -693,7 +696,7 @@ public class MessageRouter {
 
     // ── Conversation persistence ──────────────────────────────────
 
-    private void handleCreateConversation(WsSession session, JsonNode msg) {
+    private void handleCreateConversation(WebSocketSession session, JsonNode msg) {
         String skillId = msg.has("skillId") ? msg.get("skillId").asText() : null;
         String skillName = msg.has("skillName") ? msg.get("skillName").asText() : null;
         String correlationId = msg.has("correlationId") ? msg.get("correlationId").asText() : null;
@@ -703,13 +706,13 @@ public class MessageRouter {
         sendJson(session, "conversation-created", Map.of("conversation", conv), correlationId);
     }
 
-    private void handleListConversations(WsSession session, JsonNode msg) {
+    private void handleListConversations(WebSocketSession session, JsonNode msg) {
         String correlationId = msg.has("correlationId") ? msg.get("correlationId").asText() : null;
         List<Map<String, Object>> convs = conversationService.listConversations();
         sendJson(session, "conversation-list", Map.of("conversations", convs), correlationId);
     }
 
-    private void handleGetConversation(WsSession session, JsonNode msg) {
+    private void handleGetConversation(WebSocketSession session, JsonNode msg) {
         String convId = extractText(msg, "convId");
         String correlationId = msg.has("correlationId") ? msg.get("correlationId").asText() : null;
         Map<String, Object> conv = conversationService.getConversation(convId);
@@ -720,20 +723,20 @@ public class MessageRouter {
         sendJson(session, "conversation-detail", Map.of("conversation", conv), correlationId);
     }
 
-    private void handleDeleteConversation(WsSession session, JsonNode msg) {
+    private void handleDeleteConversation(WebSocketSession session, JsonNode msg) {
         String convId = extractText(msg, "convId");
         String correlationId = msg.has("correlationId") ? msg.get("correlationId").asText() : null;
         conversationService.deleteConversation(convId);
         sendJson(session, "conversation-deleted", Map.of("convId", convId), correlationId);
     }
 
-    private void handleGetHomeConversation(WsSession session, JsonNode msg) {
+    private void handleGetHomeConversation(WebSocketSession session, JsonNode msg) {
         String correlationId = msg.has("correlationId") ? msg.get("correlationId").asText() : null;
         Map<String, Object> conv = conversationService.getHomeConversation();
         sendJson(session, "home-conversation", Map.of("conversation", conv), correlationId);
     }
 
-    private void handleFindOrCreateConversation(WsSession session, JsonNode msg) {
+    private void handleFindOrCreateConversation(WebSocketSession session, JsonNode msg) {
         String skillId = msg.has("skillId") && !msg.get("skillId").asText().isEmpty()
             ? msg.get("skillId").asText() : null;
         String skillName = msg.has("skillName") ? msg.get("skillName").asText() : null;
@@ -742,7 +745,7 @@ public class MessageRouter {
         sendJson(session, "conversation-ready", Map.of("conversation", conv), correlationId);
     }
 
-    private void handleSetThreadActiveSkill(WsSession session, JsonNode msg) {
+    private void handleSetThreadActiveSkill(WebSocketSession session, JsonNode msg) {
         String convId = extractText(msg, "convId");
         String skillId = msg.has("skillId") && !msg.get("skillId").asText().isEmpty()
             ? msg.get("skillId").asText() : null;
@@ -752,7 +755,7 @@ public class MessageRouter {
             Map.of("convId", convId, "skillId", skillId != null ? skillId : ""), correlationId);
     }
 
-    private void handleUpdateConversationTitle(WsSession session, JsonNode msg) {
+    private void handleUpdateConversationTitle(WebSocketSession session, JsonNode msg) {
         String convId = extractText(msg, "convId");
         String title = extractText(msg, "title");
         String correlationId = msg.has("correlationId") ? msg.get("correlationId").asText() : null;
@@ -761,7 +764,7 @@ public class MessageRouter {
         sendJson(session, "conversation-title-updated", Map.of("convId", convId, "title", title.trim()), correlationId);
     }
 
-    private void handleGetThread(WsSession session, JsonNode msg) {
+    private void handleGetThread(WebSocketSession session, JsonNode msg) {
         String convId = extractText(msg, "convId");
         String correlationId = msg.has("correlationId") ? msg.get("correlationId").asText() : null;
         Map<String, Object> conv = conversationService.getConversation(convId);
@@ -772,7 +775,7 @@ public class MessageRouter {
         sendJson(session, "thread-detail", Map.of("thread", conv), correlationId);
     }
 
-    private void handleSkillHandoff(WsSession session, JsonNode msg) {
+    private void handleSkillHandoff(WebSocketSession session, JsonNode msg) {
         String fromSkillId = extractText(msg, "fromSkillId");
         String toSkillId = extractText(msg, "toSkillId");
         String threadId = extractNullableText(msg, "threadId");
@@ -858,7 +861,7 @@ public class MessageRouter {
         return s;
     }
 
-    private void handleDeleteMessage(WsSession session, JsonNode msg) {
+    private void handleDeleteMessage(WebSocketSession session, JsonNode msg) {
         String threadId = extractNullableText(msg, "threadId");
         String messageId = extractText(msg, "messageId");
         if (threadId == null || threadId.isEmpty() || messageId.equals("unknown")) {
@@ -905,7 +908,7 @@ public class MessageRouter {
     }
 
 
-    private void sendJson(WsSession session, String type, Map<String, Object> data, String correlationId) {
+    private void sendJson(WebSocketSession session, String type, Map<String, Object> data, String correlationId) {
         try {
             Map<String, Object> payload = new LinkedHashMap<>(data);
             payload.put("ns", "conv");
@@ -913,13 +916,13 @@ public class MessageRouter {
             if (correlationId != null) {
                 payload.put("correlationId", correlationId);
             }
-            session.send(mapper.writeValueAsString(payload), true);
+            session.sendMessage(new TextMessage(mapper.writeValueAsString(payload)));
         } catch (Exception e) {
             log.warn("Failed to send {}: {}", type, e.getMessage());
         }
     }
 
-    private void sendError(WsSession session, String skillId, String code, String message) {
+    private void sendError(WebSocketSession session, String skillId, String code, String message) {
         eventBus.publish(new KernelEvent.KernelError(skillId, code, message));
     }
 

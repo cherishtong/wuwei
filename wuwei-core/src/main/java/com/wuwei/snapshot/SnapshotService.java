@@ -3,112 +3,76 @@ package com.wuwei.snapshot;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.wuwei.entity.SnapshotEntity;
+import com.wuwei.repo.SnapshotRepo;
 import com.wuwei.store.SkillStateStore;
-import com.wuwei.store.StoreService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
-import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
-import java.sql.SQLException;
 import java.util.Optional;
 
 /**
  * Snapshot save/restore for crash recovery and hot reload.
  */
+@Service
 public class SnapshotService {
 
     private static final Logger log = LoggerFactory.getLogger(SnapshotService.class);
 
-    private final StoreService store;
+    private final SnapshotRepo snapshotRepo;
     private final SkillStateStore stateStore;
     private final ObjectMapper mapper;
 
-    private static final String SNAPSHOT_TABLE_DDL =
-        "CREATE TABLE IF NOT EXISTS skill_snapshot (" +
-        " skill_id TEXT PRIMARY KEY," +
-        " version TEXT NOT NULL," +
-        " abi_version TEXT NOT NULL DEFAULT '1.0'," +
-        " snapshot_time INTEGER NOT NULL," +
-        " reason TEXT," +
-        " ui_tree_json TEXT NOT NULL," +
-        " state_summary TEXT" +
-        ")";
-
-    public SnapshotService(StoreService store, SkillStateStore stateStore, ObjectMapper mapper) {
-        this.store = store;
+    public SnapshotService(SnapshotRepo snapshotRepo, SkillStateStore stateStore, ObjectMapper mapper) {
+        this.snapshotRepo = snapshotRepo;
         this.stateStore = stateStore;
         this.mapper = mapper;
-        store.ensureTable(SNAPSHOT_TABLE_DDL);
     }
 
+    @Transactional
     public void save(String skillId, String version, String abiVersion,
                      JsonNode uiTree, String reason) {
-        try (Connection conn = store.getRegistryConnection();
-             PreparedStatement ps = conn.prepareStatement(
-                 "INSERT OR REPLACE INTO skill_snapshot(skill_id, version, abi_version, " +
-                 "snapshot_time, reason, ui_tree_json, state_summary) " +
-                 "VALUES(?, ?, ?, ?, ?, ?, ?)")) {
-
-            // Collect all keys from the skill's KV store
-            String stateSummary = buildStateSummary(skillId);
-
-            ps.setString(1, skillId);
-            ps.setString(2, version);
-            ps.setString(3, abiVersion);
-            ps.setLong(4, System.currentTimeMillis() / 1000);
-            ps.setString(5, reason);
-            ps.setString(6, mapper.writeValueAsString(uiTree));
-            ps.setString(7, stateSummary);
-            ps.executeUpdate();
-
+        try {
+            String stateSummary = String.valueOf(stateStore.keyCount(skillId));
+            var entity = snapshotRepo.findById(skillId).orElse(new SnapshotEntity());
+            entity.setSkillId(skillId);
+            entity.setVersion(version);
+            entity.setAbiVersion(abiVersion);
+            entity.setSnapshotTime(System.currentTimeMillis() / 1000);
+            entity.setReason(reason);
+            entity.setUiTreeJson(mapper.writeValueAsString(uiTree));
+            entity.setStateSummary(stateSummary);
+            snapshotRepo.save(entity);
             log.debug("Snapshot saved for skill={} reason={}", skillId, reason);
-        } catch (Exception e) {
+        } catch (JsonProcessingException e) {
             log.error("Snapshot save failed for skill={}", skillId, e);
         }
     }
 
     public Optional<SkillSnapshot> restore(String skillId) {
-        try (Connection conn = store.getRegistryConnection();
-             PreparedStatement ps = conn.prepareStatement(
-                 "SELECT version, abi_version, snapshot_time, reason, ui_tree_json, state_summary " +
-                 "FROM skill_snapshot WHERE skill_id = ?")) {
-            ps.setString(1, skillId);
-            try (ResultSet rs = ps.executeQuery()) {
-                if (rs.next()) {
-                    JsonNode uiTree = mapper.readTree(rs.getString("ui_tree_json"));
-                    return Optional.of(new SkillSnapshot(
-                        skillId,
-                        rs.getString("version"),
-                        rs.getString("abi_version"),
-                        rs.getLong("snapshot_time"),
-                        rs.getString("reason"),
-                        uiTree,
-                        rs.getString("state_summary")
-                    ));
-                }
+        return snapshotRepo.findById(skillId).map(e -> {
+            try {
+                JsonNode uiTree = mapper.readTree(e.getUiTreeJson());
+                return new SkillSnapshot(
+                    skillId,
+                    e.getVersion(),
+                    e.getAbiVersion(),
+                    e.getSnapshotTime(),
+                    e.getReason(),
+                    uiTree,
+                    e.getStateSummary()
+                );
+            } catch (JsonProcessingException ex) {
+                log.warn("Snapshot restore parse failed for skill={}: {}", skillId, ex.getMessage());
+                return null;
             }
-        } catch (Exception e) {
-            log.warn("Snapshot restore failed for skill={}: {}", skillId, e.getMessage());
-        }
-        return Optional.empty();
+        });
     }
 
+    @Transactional
     public void delete(String skillId) {
-        try (Connection conn = store.getRegistryConnection();
-             PreparedStatement ps = conn.prepareStatement(
-                 "DELETE FROM skill_snapshot WHERE skill_id = ?")) {
-            ps.setString(1, skillId);
-            ps.executeUpdate();
-        } catch (SQLException e) {
-            log.warn("Snapshot delete failed for skill={}", skillId, e);
-        }
-    }
-
-    private String buildStateSummary(String skillId) {
-        // Phase 1: just store key count. Phase 2 will store actual key list.
-        int count = stateStore.keyCount(skillId);
-        return String.valueOf(count);
+        snapshotRepo.deleteById(skillId);
     }
 }
