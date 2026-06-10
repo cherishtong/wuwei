@@ -15,7 +15,9 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.web.context.WebServerInitializedEvent;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.EnableAsync;
 import org.springframework.scheduling.annotation.EnableScheduling;
 
@@ -43,6 +45,14 @@ public class Main {
     AiAskAgent aiAskAgent(StoreService storeService) {
         var routing = storeService.getModelRouting("ai/ask");
         return AgentFactory.createAskAgentStatic(routing);
+    }
+
+    // ── Tauri sidecar port output ───────────────────────────────
+
+    @EventListener
+    void onServerReady(WebServerInitializedEvent event) {
+        int port = event.getWebServer().getPort();
+        System.out.println("WUWEI_PORT:" + port);
     }
 
     // ── Startup sequence ─────────────────────────────────────────
