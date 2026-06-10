@@ -81,6 +81,8 @@ graalvmNative {
             // Include AOT output in native image classpath
             classpath = sourceSets.main.runtimeClasspath
             buildArgs.add('--no-fallback')
+            // CI-friendly memory limit (override with -PnativeImageXmx=4g)
+            buildArgs.add("-J-Xmx${findProperty('nativeImageXmx') ?: '4g'}")
             // Size optimizations (no AddAllCharsets, no debug info overhead)
             buildArgs.add('--enable-url-protocols=http,https')
             // Resources

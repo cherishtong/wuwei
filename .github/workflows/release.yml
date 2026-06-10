@@ -116,7 +116,7 @@ jobs:
 
       - name: Build native kernel
         working-directory: wuwei-core
-        run: gradle nativeCompile --no-daemon -PnativeImageXmx=6g
+        run: gradle nativeCompile --no-daemon -PnativeImageXmx=4g
 
       - name: Upload native binary
         uses: actions/upload-artifact@v4
@@ -187,7 +187,7 @@ jobs:
 
       - name: Build native kernel
         working-directory: wuwei-core
-        run: gradle nativeCompile --no-daemon -PnativeImageXmx=6g
+        run: gradle nativeCompile --no-daemon -PnativeImageXmx=4g
 
       - name: Upload native binary
         uses: actions/upload-artifact@v4
@@ -258,7 +258,7 @@ jobs:
 
       - name: Build native kernel
         working-directory: wuwei-core
-        run: gradle nativeCompile --no-daemon -PnativeImageXmx=6g
+        run: gradle nativeCompile --no-daemon -PnativeImageXmx=4g
 
       # Tauri
       - name: Copy kernel for Tauri bundle
