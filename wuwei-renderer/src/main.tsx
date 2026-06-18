@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client';
 import { App } from './App';
 import { kernel } from './kernel';
 import { initBridge } from './bridge';
+import { initAiModalBridge } from './components/AiChatModal';
 import './index.css';
 
 if ('Notification' in window && Notification.permission === 'default') {
@@ -11,6 +12,7 @@ if ('Notification' in window && Notification.permission === 'default') {
 
 kernel.init();
 initBridge();
+initAiModalBridge();
 
 // Forward browser console to kernel render-log
 ['log','warn','error'].forEach(function(lvl) {

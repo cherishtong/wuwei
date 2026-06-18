@@ -1,192 +1,183 @@
 package com.wuwei.llm;
 
 import com.wuwei.store.StoreService;
-import dev.langchain4j.memory.chat.MessageWindowChatMemory;
-import dev.langchain4j.model.chat.ChatModel;
-import dev.langchain4j.model.chat.StreamingChatModel;
-import dev.langchain4j.model.openai.OpenAiChatModel;
-import dev.langchain4j.model.openai.OpenAiStreamingChatModel;
-import dev.langchain4j.service.AiServices;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.openai.OpenAiChatModel;
+import org.springframework.ai.openai.OpenAiChatOptions;
+import org.springframework.ai.openai.api.OpenAiApi;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import reactor.core.publisher.Flux;
 
-import java.time.Duration;
 import java.util.Map;
 
 /**
- * Creates LangChain4j AiServices agents with per-request model routing + ChatMemory.
+ * Spring AI — native ChatClient factory for dynamic model routing.
  *
- * Defaults come from Spring Boot configuration (application.yml / env vars).
- * Model routing overrides come from the SQLite model_routing table (set via frontend).
- *
- * Priority: user override → model_routing → application.yml defaults
+ * Design:
+ * - {@link #chatClientFor(String)} reads DB routing config and builds a ChatClient.
+ * - {@link #chatClientFor(String, Map)} accepts optional model overrides from the frontend.
+ * - {@link #call(String, String, String)} and {@link #stream(String, String, String)}
+ *   are convenience methods that wrap ChatClient.prompt().user().call().content().
+ * - No more {@code @AiService} proxies, {@code TokenStream} callbacks, or separate
+ *   Agent classes — Spring AI's ChatClient IS the universal API.
  */
 @Service
 public class AgentFactory {
 
     private static final Logger log = LoggerFactory.getLogger(AgentFactory.class);
 
-    private final StoreService storeService;
-    private final SummarizingChatMemoryStore memoryStore;
-
-    @Value("${langchain4j.open-ai.chat-model.base-url:https://api.deepseek.com/v1}")
+    @Value("${spring.ai.openai.base-url:https://api.deepseek.com/v1}")
     private String defaultBaseUrl;
 
-    @Value("${langchain4j.open-ai.chat-model.api-key:}")
+    @Value("${spring.ai.openai.api-key:}")
     private String defaultApiKey;
 
-    @Value("${langchain4j.open-ai.chat-model.model-name:deepseek-v4-pro}")
+    @Value("${spring.ai.openai.chat.options.model:deepseek-v4-pro}")
     private String defaultModel;
 
-    @Value("${langchain4j.open-ai.chat-model.timeout:300s}")
-    private Duration defaultTimeout;
+    private final StoreService storeService;
 
-    public AgentFactory(StoreService storeService, SummarizingChatMemoryStore memoryStore) {
+    public AgentFactory(StoreService storeService) {
         this.storeService = storeService;
-        this.memoryStore = memoryStore;
     }
 
-    // ── Static utility (for bootstrapping, no ChatMemory) ──────────────
+    // ── Primary API: build a ChatClient for a task type ─────────────
 
-    /** Create a bare AiAskAgent from routing config — used for memory summarization. */
-    public static AiAskAgent createAskAgentStatic(Map<String, String> routing) {
-        LlmConfig config = LlmConfig.fromMap(routing);
-        ChatModel model = OpenAiChatModel.builder()
-            .baseUrl(apiUrlOrDefault(config))
-            .apiKey(apiKeyOrDefault(config))
-            .modelName(config.model())
-            .timeout(Duration.ofSeconds(300))
-            .maxRetries(1)
-            .logRequests(false).logResponses(false)
+    /**
+     * Build a ChatClient from DB routing config for the given task type.
+     * Falls back to {@code spring.ai.openai.*} application properties.
+     */
+    public ChatClient chatClientFor(String taskType) {
+        return chatClientFor(taskType, null);
+    }
+
+    /**
+     * Build a ChatClient with optional runtime overrides (model, apiKey, apiUrl).
+     * Overrides take priority over DB routing, which takes priority over defaults.
+     */
+    public ChatClient chatClientFor(String taskType, Map<String, String> modelOverride) {
+        var routing = storeService.getModelRouting(taskType);
+
+        String key = resolve(modelOverride, routing, "apiKey", defaultApiKey);
+        String url = resolve(modelOverride, routing, "apiUrl", defaultBaseUrl);
+        String model = resolve(modelOverride, routing, "model", defaultModel);
+
+        // Build with the resolved config — ChatClient is lightweight, no need to cache
+        var api = OpenAiApi.builder().baseUrl(url).apiKey(key).build();
+        var chatModel = OpenAiChatModel.builder()
+            .openAiApi(api)
+            .defaultOptions(OpenAiChatOptions.builder().model(model).build())
             .build();
-        StreamingChatModel streamingModel = OpenAiStreamingChatModel.builder()
-            .baseUrl(apiUrlOrDefault(config))
-            .apiKey(apiKeyOrDefault(config))
-            .modelName(config.model())
-            .timeout(Duration.ofSeconds(300))
-            .logRequests(false).logResponses(false)
-            .build();
-        return AiServices.builder(AiAskAgent.class)
-            .chatModel(model)
-            .streamingChatModel(streamingModel)
-            .build();
+        return ChatClient.builder(chatModel).build();
     }
 
-    // ── Public factory methods ─────────────────────────────────────────
+    // ── Convenience methods ─────────────────────────────────────────
 
-    public SkillGenerateAgent createGenerateAgent(String skillId, Map<String, String> override) {
-        LlmConfig config = resolveConfig("skill/generate", override);
-        StreamingChatModel model = buildStreamingModel(config);
-        return AiServices.builder(SkillGenerateAgent.class)
-            .streamingChatModel(model)
-            .chatMemoryProvider(memoryId -> MessageWindowChatMemory.builder()
-                .id(memoryId).maxMessages(20).chatMemoryStore(memoryStore).build())
-            .build();
-    }
-
-    public SkillGenerateSyncAgent createGenerateSyncAgent(String skillId, Map<String, String> override) {
-        LlmConfig config = resolveConfig("skill/generate", override);
-        ChatModel model = buildChatModel(config);
-        return AiServices.builder(SkillGenerateSyncAgent.class)
-            .chatModel(model)
-            .chatMemoryProvider(memoryId -> MessageWindowChatMemory.builder()
-                .id(memoryId).maxMessages(20).chatMemoryStore(memoryStore).build())
-            .build();
-    }
-
-    public SkillRepairAgent createRepairAgent(String skillId, Map<String, String> override) {
-        LlmConfig config = resolveConfig("skill/repair", override);
-        ChatModel model = buildChatModel(config);
-        return AiServices.builder(SkillRepairAgent.class)
-            .chatModel(model)
-            .chatMemoryProvider(memoryId -> MessageWindowChatMemory.builder()
-                .id(memoryId).maxMessages(20).chatMemoryStore(memoryStore).build())
-            .build();
-    }
-
-    public DriftAnalysisAgent createDriftAgent(String skillId, Map<String, String> override) {
-        LlmConfig config = resolveConfig("skill/drift", override);
-        ChatModel model = buildChatModel(config);
-        return AiServices.builder(DriftAnalysisAgent.class)
-            .chatModel(model)
-            .chatMemoryProvider(memoryId -> MessageWindowChatMemory.builder()
-                .id(memoryId).maxMessages(20).chatMemoryStore(memoryStore).build())
-            .build();
-    }
-
-    public PlannerAgent createPlannerAgent(Map<String, String> override) {
-        LlmConfig config = resolveConfig("skill/generate", override);
-        ChatModel model = buildChatModel(config);
-        return AiServices.builder(PlannerAgent.class).chatModel(model).build();
-    }
-
-    public ChatModel createChatModel(Map<String, String> override) {
-        return buildChatModel(resolveConfig("skill/generate", override));
-    }
-
-    public AiAskAgent createAskAgent(Map<String, String> override) {
-        LlmConfig config = resolveConfig("ai/ask", override);
-        ChatModel model = buildChatModel(config);
-        StreamingChatModel streamingModel = buildStreamingModel(config);
-        return AiServices.builder(AiAskAgent.class)
-            .chatModel(model).streamingChatModel(streamingModel)
-            .chatMemoryProvider(memoryId -> MessageWindowChatMemory.builder()
-                .id(memoryId).maxMessages(20).chatMemoryStore(memoryStore).build())
-            .build();
-    }
-
-    public String chat(String prompt) { return rawChat(prompt); }
-
-    public String rawChat(String prompt) {
+    /**
+     * Synchronous chat with separate system + user prompts.
+     *
+     * @param systemPrompt optional system prompt (can be null)
+     * @param userPrompt   the user message
+     * @param taskType     routing key (e.g. "skill/generate", "ai/ask")
+     * @return LLM text response, or null on error
+     */
+    public String call(String systemPrompt, String userPrompt, String taskType) {
         try {
-            LlmConfig config = resolveConfig("ai/ask", null);
-            ChatModel model = buildChatModel(config);
-            var response = model.chat(
-                dev.langchain4j.data.message.SystemMessage.from("You are a code analysis assistant. Output ONLY valid JSON, no markdown fences, no explanations."),
-                dev.langchain4j.data.message.UserMessage.from(prompt));
-            return response.aiMessage().text();
+            var spec = chatClientFor(taskType).prompt();
+            if (systemPrompt != null && !systemPrompt.isBlank()) {
+                spec = spec.system(systemPrompt);
+            }
+            return spec.user(userPrompt).call().content();
         } catch (Exception e) {
-            log.warn("rawChat failed: {}", e.getMessage());
+            log.warn("call({}) failed: {}", taskType, e.getMessage());
             return null;
         }
     }
 
-    // ── Internal ───────────────────────────────────────────────────────
-
-    LlmConfig resolveConfig(String taskType, Map<String, String> override) {
-        Map<String, String> routing = storeService.getModelRouting(taskType);
-        return LlmConfig.merge(override, routing);
+    /**
+     * Synchronous chat with model override.
+     */
+    public String call(String systemPrompt, String userPrompt, String taskType,
+                       Map<String, String> modelOverride) {
+        try {
+            var spec = chatClientFor(taskType, modelOverride).prompt();
+            if (systemPrompt != null && !systemPrompt.isBlank()) {
+                spec = spec.system(systemPrompt);
+            }
+            return spec.user(userPrompt).call().content();
+        } catch (Exception e) {
+            log.warn("call({}) with override failed: {}", taskType, e.getMessage());
+            return null;
+        }
     }
 
-    ChatModel buildChatModel(LlmConfig config) {
-        String url = config.apiUrl() != null && !config.apiUrl().isBlank() ? config.apiUrl() : defaultBaseUrl;
-        String key = config.apiKey() != null && !config.apiKey().isBlank() ? config.apiKey() : defaultApiKey;
-        log.debug("buildChatModel: baseUrl={} model={}", url, config.model());
-        return OpenAiChatModel.builder()
-            .baseUrl(url).apiKey(key).modelName(config.model())
-            .timeout(defaultTimeout).maxRetries(1)
-            .logRequests(false).logResponses(true)
-            .build();
+    /**
+     * Streaming chat via Spring AI Flux.
+     * The caller subscribes to the Flux to receive token-by-token output.
+     *
+     * @param systemPrompt optional system prompt (can be null)
+     * @param userPrompt   the user message
+     * @param taskType     routing key
+     * @return Flux<String> of token chunks
+     */
+    public Flux<String> stream(String systemPrompt, String userPrompt, String taskType) {
+        return stream(systemPrompt, userPrompt, taskType, null);
     }
 
-    StreamingChatModel buildStreamingModel(LlmConfig config) {
-        String url = config.apiUrl() != null && !config.apiUrl().isBlank() ? config.apiUrl() : defaultBaseUrl;
-        String key = config.apiKey() != null && !config.apiKey().isBlank() ? config.apiKey() : defaultApiKey;
-        return OpenAiStreamingChatModel.builder()
-            .baseUrl(url).apiKey(key).modelName(config.model())
-            .timeout(defaultTimeout)
-            .logRequests(false).logResponses(true)
-            .build();
+    /**
+     * Streaming chat with model override.
+     */
+    public Flux<String> stream(String systemPrompt, String userPrompt, String taskType,
+                               Map<String, String> modelOverride) {
+        try {
+            var spec = chatClientFor(taskType, modelOverride).prompt();
+            if (systemPrompt != null && !systemPrompt.isBlank()) {
+                spec = spec.system(systemPrompt);
+            }
+            return spec.user(userPrompt).stream().content();
+        } catch (Exception e) {
+            log.warn("stream({}) failed: {}", taskType, e.getMessage());
+            return Flux.error(e);
+        }
     }
 
-    private static String apiUrlOrDefault(LlmConfig c) {
-        return c.apiUrl() != null && !c.apiUrl().isBlank() ? c.apiUrl() : "https://api.deepseek.com/v1";
+    // ── Backward-compatible shortcuts ────────────────────────────────
+
+    /** Raw single-prompt chat (used by AiCapability, SkillIndexer.search). */
+    public String rawChat(String prompt) {
+        return call(null, prompt, "ai/ask");
     }
 
-    private static String apiKeyOrDefault(LlmConfig c) {
-        return c.apiKey() != null && !c.apiKey().isBlank() ? c.apiKey()
-            : (System.getenv("OPENAI_API_KEY") != null ? System.getenv("OPENAI_API_KEY") : "");
+    /** Single-prompt chat (used by SkillIndexer.indexSkill, ResumeDataService.generateMapping). */
+    public String chat(String prompt) {
+        return rawChat(prompt);
+    }
+
+    /** Chat with system + user (used by ResumeDataService.optimize — replaced by stream). */
+    public String chat(String system, String user) {
+        return call(system, user, "ai/ask");
+    }
+
+    // ── Status ───────────────────────────────────────────────────────
+
+    public boolean enabled() {
+        return defaultApiKey != null && !defaultApiKey.isBlank();
+    }
+
+    // ── Internal helpers ─────────────────────────────────────────────
+
+    /** Resolve config value: override > DB routing > default. */
+    private static String resolve(Map<String, String> override, Map<String, String> routing,
+                                   String key, String defaultValue) {
+        if (override != null) {
+            String v = override.get(key);
+            if (v != null && !v.isBlank()) return v;
+        }
+        String v = routing.get(key);
+        if (v != null && !v.isBlank()) return v;
+        return defaultValue;
     }
 }

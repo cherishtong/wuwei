@@ -1,6 +1,7 @@
 package com.wuwei.capability;
 
 import com.wuwei.bus.EventBus;
+import com.wuwei.resume.ResumeCapability;
 import org.springframework.stereotype.Component;
 import com.wuwei.bus.event.KernelEvent;
 import com.wuwei.skill.SkillManifest;
@@ -33,6 +34,7 @@ public class CapabilityManager {
     private final CryptoCapability cryptoCap;
     private final DatabaseCapability databaseCap;
     private final WebSearchCapability webSearchCap;
+    private final ResumeCapability resumeCap;
     private final EventBus eventBus;
 
     /** Pending gate requests: key = "skillId:capName", value = CompletableFuture to complete */
@@ -47,7 +49,7 @@ public class CapabilityManager {
     public CapabilityManager(SkillStateStore stateStore, NetworkCapability networkCap,
                              FileCapability fileCap, AiCapability aiCap,
                              CryptoCapability cryptoCap, DatabaseCapability databaseCap,
-                             WebSearchCapability webSearchCap,
+                             WebSearchCapability webSearchCap, ResumeCapability resumeCap,
                              EventBus eventBus) {
         this.stateStore = stateStore;
         this.networkCap = networkCap;
@@ -56,6 +58,7 @@ public class CapabilityManager {
         this.cryptoCap = cryptoCap;
         this.databaseCap = databaseCap;
         this.webSearchCap = webSearchCap;
+        this.resumeCap = resumeCap;
         this.eventBus = eventBus;
     }
 
@@ -82,6 +85,41 @@ public class CapabilityManager {
             skillThreadMap.put(skillId, threadId);
         } else {
             skillThreadMap.remove(skillId);
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private Object executeResumeProxy(String method, List<Object> args) {
+        // Direct delegate to ResumeCapability — no HTTP round-trip needed
+        var cap = resumeCap.forSkill();
+        var fn = (org.graalvm.polyglot.proxy.ProxyExecutable) cap.getMember(method);
+        if (fn == null) return Map.of("error", "Unknown resume method: " + method);
+        try {
+            // Convert List<Object> back to Value[] for the proxy executable
+            var polyglot = org.graalvm.polyglot.Context.create("js");
+            var valueArgs = new org.graalvm.polyglot.Value[args.size()];
+            for (int i = 0; i < args.size(); i++) {
+                Object arg = args.get(i);
+                if (arg instanceof String s) valueArgs[i] = polyglot.asValue(s);
+                else if (arg instanceof Number n) valueArgs[i] = polyglot.asValue(n);
+                else if (arg instanceof Map m) valueArgs[i] = polyglot.asValue(m);
+                else valueArgs[i] = polyglot.asValue(String.valueOf(arg));
+            }
+            Object result = fn.execute(valueArgs);
+            // Unwrap ProxyObject to plain Map for JSON serialization
+            if (result instanceof org.graalvm.polyglot.proxy.ProxyObject po) {
+                Map<String, Object> plain = new LinkedHashMap<>();
+                var keys = po.getMemberKeys();
+                if (keys instanceof java.util.Set<?> s) {
+                    for (Object key : s) {
+                        plain.put((String) key, po.getMember((String) key));
+                    }
+                }
+                return plain;
+            }
+            return result;
+        } catch (Exception e) {
+            return Map.of("error", e.getMessage());
         }
     }
 
@@ -187,6 +225,7 @@ public class CapabilityManager {
         if (capSet == null) {
             return Map.of("error", "No capability set for " + skillId);
         }
+        log.info("executeProxy skill={} cap={} method={}", skillId, capName, method);
         try {
             return switch (capName) {
                 case "storage" -> executeStorageProxy(skillId, method, args);
@@ -197,6 +236,7 @@ public class CapabilityManager {
                 case "crypto" -> cryptoCap.executeProxy(method, args);
                 case "db" -> databaseCap.executeProxy(skillId, method, args);
                 case "websearch" -> webSearchCap.executeProxy(skillId, method, args);
+                case "resume" -> { log.info("resume proxy method={}", method); yield executeResumeProxy(method, args); }
                 default -> Map.of("error", "Unknown capability: " + capName);
             };
         } catch (Exception e) {

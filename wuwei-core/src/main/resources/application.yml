@@ -27,15 +27,11 @@ spring:
   # ── Static resources for SPA ──────────────────────────────────
   web.resources.static-locations: classpath:/static/
 
-# ── LangChain4j defaults ───────────────────────────────────────
-langchain4j:
-  open-ai:
-    chat-model:
-      base-url: https://api.deepseek.com/v1
-      api-key: ${DEEPSEEK_API_KEY:}
-      model-name: deepseek-v4-pro
-      timeout: 300s
-      max-retries: 1
+# ── Spring AI defaults (DeepSeek via OpenAI-compatible API) ────
+spring.ai.openai:
+  base-url: https://api.deepseek.com
+  api-key: ${DEEPSEEK_API_KEY:}
+  chat.options.model: deepseek-v4-pro
 
 # ── Logging ────────────────────────────────────────────────────
 logging:

@@ -34,8 +34,8 @@ function proxyCall(
     const requestId = `${capName}-${method}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const timer = setTimeout(() => {
       pendingRequests.delete(requestId);
-      reject(new Error(`Timeout: ${capName}.${method} after 30s`));
-    }, 30000);
+      reject(new Error(`Timeout: ${capName}.${method} after 120s`));
+    }, 120000);
     pendingRequests.set(requestId, { resolve, reject, timer });
     kernel.send({
       type: 'capability-proxy',
@@ -127,6 +127,23 @@ export function createProxyCapabilities(
           results: { title: string; url: string; snippet: string; score?: number }[];
           answer: string;
         }>,
+    };
+  }
+
+  if (declaredCaps.resume) {
+    caps.resume = {
+      list: () => proxyCall(skillId, 'resume', 'list', []) as Promise<any[]>,
+      read: (name: string) => proxyCall(skillId, 'resume', 'read', [name]) as Promise<string>,
+      upload: (name: string, content: string) => proxyCall(skillId, 'resume', 'upload', [name, content]) as Promise<any>,
+      delete: (name: string) => proxyCall(skillId, 'resume', 'delete', [name]) as Promise<any>,
+      parse: (name: string) => proxyCall(skillId, 'resume', 'parse', [name]) as Promise<any>,
+      dataList: () => proxyCall(skillId, 'resume', 'dataList', []) as Promise<any[]>,
+      dataLoad: (name: string) => proxyCall(skillId, 'resume', 'dataLoad', [name]) as Promise<any>,
+      dataSave: (name: string, dataJson: string, mappingJson?: string) => proxyCall(skillId, 'resume', 'dataSave', [name, dataJson, mappingJson ?? null]) as Promise<any>,
+      dataDelete: (name: string) => proxyCall(skillId, 'resume', 'dataDelete', [name]) as Promise<any>,
+      optimize: (dataJson: string, mappingJson: string, suggestion?: string) => proxyCall(skillId, 'resume', 'optimize', [dataJson, mappingJson, suggestion ?? '']) as Promise<string>,
+      generateMapping: (templateName: string, dataJson: string) => proxyCall(skillId, 'resume', 'generateMapping', [templateName, dataJson]) as Promise<string>,
+      render: (templateId: string, data: Record<string, unknown>) => proxyCall(skillId, 'resume', 'render', [templateId, data]) as Promise<string>,
     };
   }
 

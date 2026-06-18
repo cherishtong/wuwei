@@ -314,6 +314,9 @@ export function WwWorkspace({ activeThreadId, initDetail }: WwWorkspaceProps) {
           `full keys: ${Object.keys((e as CustomEvent).detail).join(', ')}`
         );
       }
+      // Always expose active skillId globally (before thread check)
+      (window as any).__wuwei_activeSkillId = skillId;
+
       if (!threadMatches(threadId)) return;
 
       if (initializedRef.current === skillId) {
@@ -321,7 +324,6 @@ export function WwWorkspace({ activeThreadId, initDetail }: WwWorkspaceProps) {
         return;
       }
       initializedRef.current = skillId as string;
-      (window as any).__wuwei_activeSkillId = skillId;
       loadSkill(skillId, ui);
 
       const state = getCurrentThreadState();

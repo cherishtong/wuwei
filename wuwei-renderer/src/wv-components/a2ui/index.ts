@@ -48,6 +48,7 @@ import { WvA2uiCommand } from './Command';
 import { WvA2uiSonner } from './Sonner';
 import { WvA2uiScrollArea } from './ScrollArea';
 import { WvA2uiCanvas } from './Canvas';
+import { WvA2uiDocxEditor } from './DocxEditor';
 
 export const wvCatalog = new Catalog(
   'https://a2ui.org/specification/v0_9/basic_catalog.json',
@@ -100,6 +101,7 @@ export const wvCatalog = new Catalog(
     WvA2uiSonner,
     WvA2uiScrollArea,
     WvA2uiCanvas,
+    WvA2uiDocxEditor,
   ] as never,
   BASIC_FUNCTIONS
 );

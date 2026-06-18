@@ -46,6 +46,16 @@ export interface BrowserCapability {
   websearch?: {
     search(query: string, opts?: { limit?: number }): Promise<{ results: { title: string; url: string; snippet: string; score?: number }[]; answer: string }>;
   };
+  resume?: {
+    list(): Promise<any[]>; upload(name: string, content: string): Promise<any>;
+    delete(name: string): Promise<any>; parse(name: string): Promise<any>;
+    read(name: string): Promise<string>; render(templateId: string, data: Record<string, unknown>): Promise<string>;
+    dataList(): Promise<any[]>; dataLoad(name: string): Promise<any>;
+    dataSave(name: string, dataJson: string, mappingJson?: string): Promise<any>;
+    dataDelete(name: string): Promise<any>;
+    optimize(dataJson: string, mappingJson: string, suggestion?: string): Promise<string>;
+    generateMapping(templateName: string, dataJson: string): Promise<string>;
+  };
   canvas?: {
     render(canvasId: string, commands: Record<string, unknown>[]): void;
     getContext?(canvasId: string): CanvasRenderingContext2D | null;

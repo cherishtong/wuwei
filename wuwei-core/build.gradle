@@ -2,7 +2,7 @@ plugins {
     id 'java'
     id 'org.springframework.boot' version '3.4.5'
     id 'io.spring.dependency-management' version '1.1.7'
-    id 'org.graalvm.buildtools.native' version '0.10.5'
+    id 'org.graalvm.buildtools.native' version '0.10.4'
 }
 
 group = 'com.wuwei'
@@ -16,12 +16,11 @@ java {
 repositories {
     mavenCentral()
     maven { url 'https://maven.aliyun.com/repository/public' }
-
+    maven { url 'https://repo.spring.io/milestone' }
 }
 
 ext {
     graalvmVersion = '25.0.2'
-    langchain4jVersion = '1.15.0'
 }
 
 dependencies {
@@ -31,9 +30,9 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
     implementation 'org.springframework.boot:spring-boot-starter-actuator'
 
-    // LangChain4j — direct LLM calls (manual builder with @Value defaults)
-    implementation "dev.langchain4j:langchain4j:${langchain4jVersion}"
-    implementation "dev.langchain4j:langchain4j-open-ai:${langchain4jVersion}"
+    // Spring AI — replaces LangChain4j (native streaming via Flux, OpenAI-compatible)
+    implementation 'org.springframework.ai:spring-ai-openai-spring-boot-starter:1.0.0-M6'
+    implementation 'io.projectreactor:reactor-core'
 
     // GraalVM Polyglot SDK + JS runtime (community edition)
     implementation "org.graalvm.polyglot:polyglot:${graalvmVersion}"
@@ -41,6 +40,9 @@ dependencies {
 
     // SQLite — only for DatabaseCapability (per-skill isolated DBs)
     implementation 'org.xerial:sqlite-jdbc:3.45.1.0'
+
+    // poi-tl — docx template engine (resume-builder skill)
+    implementation 'com.deepoove:poi-tl:1.12.2'
 
     // H2 — for Spring Data JPA (registry.db replacement in dev/test)
     runtimeOnly 'com.h2database:h2'

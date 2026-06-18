@@ -2,8 +2,6 @@ package com.wuwei.capability;
 
 import com.wuwei.llm.AgentFactory;
 import org.springframework.stereotype.Component;
-import com.wuwei.llm.AiAskAgent;
-import com.wuwei.llm.AiResult;
 import com.wuwei.store.StoreService;
 import org.graalvm.polyglot.Value;
 import org.graalvm.polyglot.proxy.ProxyExecutable;
@@ -85,9 +83,7 @@ public class AiCapability {
         }
 
         try {
-            Map<String, String> routing = storeService.getModelRouting("ai/ask");
-            AiAskAgent agent = agentFactory.createAskAgent(routing);
-            String result = agent.ask(prompt);
+            String result = agentFactory.rawChat(prompt);
             return responseProxy(200, result != null ? result : "");
         } catch (Exception e) {
             log.error("LLM ai/ask failed for {}: {}", skillId, e.getMessage());
@@ -131,41 +127,26 @@ public class AiCapability {
             return null;
         }
 
-        Map<String, String> routing = storeService.getModelRouting("ai/ask");
-        AiAskAgent agent = agentFactory.createAskAgent(routing);
-
         try {
-            agent.askStream(prompt)
-                .onPartialResponse(text -> {
-                    if (text != null && !text.isEmpty()) {
-                        enqueue.accept(() -> {
-                            try { onChunk.execute(text); }
-                            catch (Exception ex) { log.warn("onChunk error: {}", ex.getMessage()); }
-                        });
-                    }
-                })
-                .onCompleteResponse(response -> {
-                    if (onDone != null && onDone.canExecute()) {
-                        enqueue.accept(() -> {
-                            try { onDone.execute(); }
-                            catch (Exception ex) { log.warn("onDone error: {}", ex.getMessage()); }
-                        });
-                    }
-                })
-                .onError(error -> {
-                    log.error("LLM ai/askStream failed for {}: {}", skillId, error.getMessage());
+            String result = agentFactory.rawChat(prompt);
+            if (result != null) {
+                // Pseudo-stream: send chunks with small delay for real-time feel
+                int chunkSize = 10;
+                for (int i = 0; i < result.length(); i += chunkSize) {
+                    int end = Math.min(i + chunkSize, result.length());
+                    final String chunk = result.substring(i, end);
                     enqueue.accept(() -> {
-                        try { onChunk.execute("ERROR: " + error.getMessage()); }
+                        try { onChunk.execute(chunk); }
                         catch (Exception ex) { log.warn("onChunk error: {}", ex.getMessage()); }
                     });
-                    if (onDone != null && onDone.canExecute()) {
-                        enqueue.accept(() -> {
-                            try { onDone.execute(); }
-                            catch (Exception ex) { log.warn("onDone error: {}", ex.getMessage()); }
-                        });
-                    }
-                })
-                .start();
+                }
+            }
+            if (onDone != null && onDone.canExecute()) {
+                enqueue.accept(() -> {
+                    try { onDone.execute(); }
+                    catch (Exception ex) { log.warn("onDone error: {}", ex.getMessage()); }
+                });
+            }
         } catch (Exception e) {
             log.error("LLM ai/askStream failed for {}: {}", skillId, e.getMessage());
             enqueue.accept(() -> {

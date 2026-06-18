@@ -3,8 +3,6 @@ package com.wuwei;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.wuwei.llm.AgentFactory;
-import com.wuwei.llm.AiAskAgent;
-import com.wuwei.llm.SummarizingChatMemoryStore;
 import com.wuwei.log.LogConfig;
 import com.wuwei.rag.SkillIndexer;
 import com.wuwei.skill.SkillManager;
@@ -25,7 +23,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Map;
 
-@SpringBootApplication
+@SpringBootApplication(exclude = {
+    org.springframework.ai.autoconfigure.openai.OpenAiAutoConfiguration.class
+})
 @EnableAsync
 @EnableScheduling
 public class Main {
@@ -37,14 +37,6 @@ public class Main {
 
     public static void main(String[] args) {
         SpringApplication.run(Main.class, args);
-    }
-
-    // ── LLM dependency chain (manual wiring for LangChain4j) ──────
-
-    @Bean
-    AiAskAgent aiAskAgent(StoreService storeService) {
-        var routing = storeService.getModelRouting("ai/ask");
-        return AgentFactory.createAskAgentStatic(routing);
     }
 
     // ── Tauri sidecar port output ───────────────────────────────
@@ -73,10 +65,13 @@ public class Main {
                         JsonNode llm = cfg.get("llm");
                         String baseUrl = (llm.has("baseUrl") && !llm.get("baseUrl").isNull())
                             ? llm.get("baseUrl").asText() : "";
+                        String apiKey = (llm.has("apiKey") && !llm.get("apiKey").isNull())
+                            ? llm.get("apiKey").asText() : "";
                         storeService.seedDefaultRouting(Map.of(
                             "provider", llm.has("provider") ? llm.get("provider").asText() : "deepseek",
                             "model", llm.has("model") ? llm.get("model").asText() : "deepseek-chat",
                             "apiUrl", baseUrl,
+                            "apiKey", apiKey,
                             "params", "{}"
                         ));
                     }

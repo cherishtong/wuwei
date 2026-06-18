@@ -2,6 +2,7 @@ import { Component, type ReactNode } from 'react';
 import { ThemeProvider } from './contexts/ThemeContext';
 import { TooltipProvider } from '@/wv-components/ui/tooltip';
 import { WwShell } from './components/WwShell';
+import { AiChatModal } from './components/AiChatModal';
 
 class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
   constructor(props: { children: ReactNode }) {
@@ -35,6 +36,7 @@ export function App() {
       <TooltipProvider>
         <ThemeProvider>
           <WwShell />
+          <AiChatModal />
         </ThemeProvider>
       </TooltipProvider>
     </ErrorBoundary>

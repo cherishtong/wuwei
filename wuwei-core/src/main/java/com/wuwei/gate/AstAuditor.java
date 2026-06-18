@@ -309,7 +309,8 @@ public class AstAuditor {
                     node.property.type === 'Identifier') {
                     var capName = node.property.name;
                     // ui, permission, crypto, db, websearch are always available
-                    if (capName !== 'ui' && capName !== 'permission' &&
+                    if (capName !== 'ui' && capName !== 'data' &&
+                        capName !== 'permission' &&
                         capName !== 'crypto' && capName !== 'db' &&
                         capName !== 'websearch' &&
                         declared.indexOf(capName) === -1) {
@@ -326,6 +327,8 @@ public class AstAuditor {
                     node.callee.object.object.name === 'capability' &&
                     node.callee.object.property.type === 'Identifier' &&
                     node.callee.object.property.name === 'ui' &&
+                    node.callee.property.type === 'Identifier' &&
+                    (node.callee.property.name === 'set' || node.callee.property.name === 'get') &&
                     node.arguments.length > 0 &&
                     node.arguments[0].type !== 'Literal') {
                     issues.push('DYNAMIC_UI_ID:capability.ui id must be string literal' +

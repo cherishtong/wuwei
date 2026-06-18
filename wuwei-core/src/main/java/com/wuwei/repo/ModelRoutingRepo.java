@@ -14,10 +14,11 @@ public interface ModelRoutingRepo extends JpaRepository<ModelRoutingEntity, Stri
     @Modifying
     @Transactional
     @Query("UPDATE ModelRoutingEntity m SET m.provider = :provider, m.model = :model, " +
-           "m.apiUrl = :apiUrl, m.params = :params " +
+           "m.apiUrl = :apiUrl, m.apiKey = COALESCE(NULLIF(:apiKey, ''), m.apiKey), m.params = :params " +
            "WHERE m.apiKey = '' OR m.apiKey IS NULL")
     int updateDefaults(@Param("provider") String provider,
                        @Param("model") String model,
                        @Param("apiUrl") String apiUrl,
+                       @Param("apiKey") String apiKey,
                        @Param("params") String params);
 }

@@ -17,6 +17,7 @@ function ButtonComponent({ props, buildChild }: { props: Record<string, any>; bu
     <ShadcnButton
       variant={shadcnVariant}
       disabled={isDisabled}
+      type="button"
       onClick={() => { if (!isDisabled && action) action(); }}
     >
       {props.child != null ? buildChild(props.child as string) : null}

@@ -149,16 +149,21 @@ public class StoreService {
         String provider = llmConfig.getOrDefault("provider", "deepseek");
         String model = llmConfig.getOrDefault("model", "deepseek-chat");
         String apiUrl = llmConfig.getOrDefault("apiUrl", "");
+        String apiKey = llmConfig.getOrDefault("apiKey", "");
         String params = llmConfig.getOrDefault("params", "{}");
 
-        // Update existing rows without apiKey
-        modelRoutingRepo.updateDefaults(provider, model, apiUrl, params);
+        // Update existing rows that lack an API key
+        modelRoutingRepo.updateDefaults(provider, model, apiUrl, apiKey, params);
 
-        // Insert missing task types
+        // Insert missing task types (with apiKey if available)
         String[] taskTypes = {"skill/generate", "skill/repair", "ai/ask", "skill/drift"};
         for (String tt : taskTypes) {
             if (!modelRoutingRepo.existsById(tt)) {
-                modelRoutingRepo.save(new ModelRoutingEntity(tt, provider, model));
+                var entity = new ModelRoutingEntity(tt, provider, model);
+                entity.setApiUrl(apiUrl);
+                entity.setApiKey(apiKey);
+                entity.setParams(params);
+                modelRoutingRepo.save(entity);
             }
         }
     }

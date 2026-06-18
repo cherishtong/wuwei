@@ -416,7 +416,7 @@ public class MessageRouter {
         String requestId = extractText(msg, "requestId");
         List<Object> args = extractList(msg, "args");
 
-        log.debug("capability-proxy: skill={} cap={}.{}({})", skillId, capName, method, args);
+        log.info("capability-proxy: skill={} cap={}.{}({})", skillId, capName, method, args);
 
         Object result = capManager.executeProxy(skillId, capName, method, args);
 
